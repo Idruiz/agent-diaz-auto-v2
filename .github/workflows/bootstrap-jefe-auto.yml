@@ -60,5 +60,6 @@ jobs:
           git config user.name 'JEFE AUTO Bootstrap'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
+          git reset -- .github/workflows/verify.yml
           git commit -m 'Establish independent JEFE AUTO V2 product'
           git push origin HEAD:build/jefe-auto-v2
