@@ -1,19 +1,19 @@
 ===== IMAGE / USER / PATH =====
 uid=997(diaz) gid=997(diaz) groups=997(diaz)
-HOME=/app
+HOME=/home/diaz
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
 /app
-drwxr-xr-x   1 root root  4096 Sep  5 18:39 /app
-drwxr-xr-x 329 diaz diaz 12288 Sep  5 18:38 /app/node_modules
-drwxr-xr-x   2 diaz diaz  4096 Sep  5 18:38 /app/node_modules/.bin
+drwxr-xr-x   1 root root  4096 Sep  5 18:40 /app
+drwxr-xr-x 329 diaz diaz 12288 Sep  5 18:40 /app/node_modules
+drwxr-xr-x   2 diaz diaz  4096 Sep  5 18:40 /app/node_modules/.bin
 /usr/bin/chromium
 /usr/local/bin/npx
 /usr/local/bin/node
-lrwxrwxrwx 1 diaz diaz 55 Sep  5 18:38 chrome-devtools -> ../chrome-devtools-mcp/build/src/bin/chrome-devtools.js
-lrwxrwxrwx 1 diaz diaz 59 Sep  5 18:38 chrome-devtools-mcp -> ../chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js
-lrwxrwxrwx 1 diaz diaz 20 Sep  5 18:38 playwright -> ../playwright/cli.js
-lrwxrwxrwx 1 diaz diaz 25 Sep  5 18:38 playwright-core -> ../playwright-core/cli.js
-lrwxrwxrwx 1 diaz diaz 25 Sep  5 18:38 playwright-mcp -> ../@playwright/mcp/cli.js
+lrwxrwxrwx 1 diaz diaz 55 Sep  5 18:40 chrome-devtools -> ../chrome-devtools-mcp/build/src/bin/chrome-devtools.js
+lrwxrwxrwx 1 diaz diaz 59 Sep  5 18:40 chrome-devtools-mcp -> ../chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js
+lrwxrwxrwx 1 diaz diaz 20 Sep  5 18:40 playwright -> ../playwright/cli.js
+lrwxrwxrwx 1 diaz diaz 25 Sep  5 18:40 playwright-core -> ../playwright-core/cli.js
+lrwxrwxrwx 1 diaz diaz 25 Sep  5 18:40 playwright-mcp -> ../@playwright/mcp/cli.js
 
 ===== CHROMIUM =====
 Chromium 152.0.7977.75 built on Debian GNU/Linux 12 (bookworm)
@@ -236,22 +236,6 @@ CHROME_DEVTOOLS_MCP_EXIT=0
 
 ===== PUPPETEER =====
 puppeteer Promise { <pending> }
-file:///app/node_modules/@puppeteer/browsers/lib/launch.js:347
-                reject(new Error([
-                       ^
-
-Error: Failed to launch the browser process:  Code: null
-
-stderr:
-chrome_crashpad_handler: --database is required
-Try 'chrome_crashpad_handler --help' for more information.
-[17:17:0905/183915.925085:ERROR:third_party/crashpad/crashpad/util/linux/socket.cc:120] recvmsg: Connection reset by peer (104)
-
-TROUBLESHOOTING: https://pptr.dev/troubleshooting
-
-    at ChildProcess.onClose (file:///app/node_modules/@puppeteer/browsers/lib/launch.js:347:24)
-    at ChildProcess.emit (node:events:531:35)
-    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
-
-Node.js v22.23.2
-PUPPETEER_EXIT=1
+title JEFE AUTO
+Puppeteer browser smoke passed
+PUPPETEER_EXIT=0
