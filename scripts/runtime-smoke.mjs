@@ -57,7 +57,7 @@ try {
   if (
     !versionResponse.ok ||
     versionBody.buildSha !== "runtime-smoke-sha" ||
-    versionBody.packageVersion !== "3.4.0" ||
+    versionBody.packageVersion !== "4.0.0" ||
     versionBody.pptxgenjs !== "4.0.1" ||
     versionBody.validator !== "0.3.0"
   )

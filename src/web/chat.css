@@ -578,4 +578,55 @@
     display: none;
   }
 }
-\n\n/* JEFE//AUTO light conversation surface */\n.conversationToolbar { background: rgba(250,251,255,.94); border-bottom-color: var(--jefe-line); }\n.modeSelector button { color: #69758b; }\n.modeSelector button small, .personaControl small, .voiceNotice small { color: #8792a6; }\n.modeSelector button.active { border-color: #aebaf0; background: #e7ecff; color: #2949b3; }\n.modeSelector button.active small { color: #6675ad; }\n.personaControl > span { color: #69758b; font-family: "Orbitron", ui-sans-serif, system-ui; }\n.personaControl select, .voiceIdentity, .mic, .voiceEnd { border-color: #cbd3e3; background: #fff; color: #293044; }\n.voiceIdentity { color: #68748a; }\n.mic:first-letter { color: var(--jefe-accent); }\n.mic.active { border-color: #c96a78; background: #fff0f2; color: #9d3444; }\n.voiceEnd { border-color: #d8a7af; color: #a34555; }\n.voiceNotice { background: #edf1fb; color: #5e6980; border-bottom: 1px solid var(--jefe-line); }\n.chatWelcome { color: #768197; }\n.chatWelcome h2 { font-family: "Orbitron", ui-sans-serif, system-ui; color: #1c2130; }\n.bubble { background: #fff; border-color: #d8deea; box-shadow: 0 8px 24px rgba(39,53,94,.07); }\n.bubble.user { background: #e7ecff; border-color: #c5d0ff; }\n.bubble.assistant { background: #fff; }\n.bubble.failed { border-color: #d7a1aa; }\n.bubbleLabel { color: var(--jefe-accent); }\n.bubbleLabel span { color: #8290a5; }\n.bubble p, .messageContent { color: #232938; }\n.messageContent a { color: #2d50c7; }\n.messageContent pre, .messageContent code { background: #f0f3f8; color: #222a3b; }\n.messageContent pre { border-color: #d4dae6; }\n.messageContent th, .messageContent td { border-color: #d4dae6; }\n.messageContent blockquote { border-left-color: var(--jefe-accent-2); color: #5f697e; }\n.thinking { color: #748096; }\n.thinking i { background: var(--jefe-accent-2); }\n.messageFiles > span, .pendingFiles > span { background: #f4f6fa; border-color: #d6ddea; color: #2f3749; }\n.messageFiles small, .pendingFiles small { color: #7a879d; }\n.inlineError { color: #a13e4e !important; background: #fff0f2; }\n.bubbleActions button { color: #67748a; }\n.bubbleActions button:hover { color: var(--jefe-accent); }\n.voiceDraft { border-color: #8d7de0; }\n.composerDock { background: linear-gradient(180deg, rgba(246,248,252,0), #f6f8fc 24%); box-shadow: none; }\n.taskPicker button { background: #edf1f7; color: #69758a; }\n.taskPicker button.active { border-color: #aebaf0; color: #2949b3; background: #e4eaff; }\n.recommendation { background: #f4f1ff; border-color: #d3c9fb; color: #574a8b; }\n.recommendation button { color: #4d3db2; }\n.pendingFiles i { color: var(--jefe-accent); }\n.pendingFiles button { color: #768399; }\n.composeBox { background: #fff; border-color: #cfd6e3; box-shadow: 0 12px 32px rgba(39,53,94,.10); }\n.composeBox:focus-within { border-color: var(--jefe-accent); box-shadow: 0 0 0 3px rgba(49,86,211,.12), 0 12px 32px rgba(39,53,94,.10); }\n.composeBox textarea { color: #202637; }\n.attachButton { color: #637087; }\n.attachButton:hover { background: #eef2fb; }\n.sendButton { background: var(--jefe-accent); color: #fff; }\n.stopButton { background: #b94b5c; color: #fff; }\n.composerHint { color: #818da0; }\n
+
+
+/* JEFE//AUTO light conversation surface */
+.conversationToolbar { background: rgba(250,251,255,.94); border-bottom-color: var(--jefe-line); }
+.modeSelector button { color: #69758b; }
+.modeSelector button small, .personaControl small, .voiceNotice small { color: #8792a6; }
+.modeSelector button.active { border-color: #aebaf0; background: #e7ecff; color: #2949b3; }
+.modeSelector button.active small { color: #6675ad; }
+.personaControl > span { color: #69758b; font-family: "Orbitron", ui-sans-serif, system-ui; }
+.personaControl select, .voiceIdentity, .mic, .voiceEnd { border-color: #cbd3e3; background: #fff; color: #293044; }
+.voiceIdentity { color: #68748a; }
+.mic:first-letter { color: var(--jefe-accent); }
+.mic.active { border-color: #c96a78; background: #fff0f2; color: #9d3444; }
+.voiceEnd { border-color: #d8a7af; color: #a34555; }
+.voiceNotice { background: #edf1fb; color: #5e6980; border-bottom: 1px solid var(--jefe-line); }
+.chatWelcome { color: #768197; }
+.chatWelcome h2 { font-family: "Orbitron", ui-sans-serif, system-ui; color: #1c2130; }
+.bubble { background: #fff; border-color: #d8deea; box-shadow: 0 8px 24px rgba(39,53,94,.07); }
+.bubble.user { background: #e7ecff; border-color: #c5d0ff; }
+.bubble.assistant { background: #fff; }
+.bubble.failed { border-color: #d7a1aa; }
+.bubbleLabel { color: var(--jefe-accent); }
+.bubbleLabel span { color: #8290a5; }
+.bubble p, .messageContent { color: #232938; }
+.messageContent a { color: #2d50c7; }
+.messageContent pre, .messageContent code { background: #f0f3f8; color: #222a3b; }
+.messageContent pre { border-color: #d4dae6; }
+.messageContent th, .messageContent td { border-color: #d4dae6; }
+.messageContent blockquote { border-left-color: var(--jefe-accent-2); color: #5f697e; }
+.thinking { color: #748096; }
+.thinking i { background: var(--jefe-accent-2); }
+.messageFiles > span, .pendingFiles > span { background: #f4f6fa; border-color: #d6ddea; color: #2f3749; }
+.messageFiles small, .pendingFiles small { color: #7a879d; }
+.inlineError { color: #a13e4e !important; background: #fff0f2; }
+.bubbleActions button { color: #67748a; }
+.bubbleActions button:hover { color: var(--jefe-accent); }
+.voiceDraft { border-color: #8d7de0; }
+.composerDock { background: linear-gradient(180deg, rgba(246,248,252,0), #f6f8fc 24%); box-shadow: none; }
+.taskPicker button { background: #edf1f7; color: #69758a; }
+.taskPicker button.active { border-color: #aebaf0; color: #2949b3; background: #e4eaff; }
+.recommendation { background: #f4f1ff; border-color: #d3c9fb; color: #574a8b; }
+.recommendation button { color: #4d3db2; }
+.pendingFiles i { color: var(--jefe-accent); }
+.pendingFiles button { color: #768399; }
+.composeBox { background: #fff; border-color: #cfd6e3; box-shadow: 0 12px 32px rgba(39,53,94,.10); }
+.composeBox:focus-within { border-color: var(--jefe-accent); box-shadow: 0 0 0 3px rgba(49,86,211,.12), 0 12px 32px rgba(39,53,94,.10); }
+.composeBox textarea { color: #202637; }
+.attachButton { color: #637087; }
+.attachButton:hover { background: #eef2fb; }
+.sendButton { background: var(--jefe-accent); color: #fff; }
+.stopButton { background: #b94b5c; color: #fff; }
+.composerHint { color: #818da0; }
