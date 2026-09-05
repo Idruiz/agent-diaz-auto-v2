@@ -21,7 +21,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.12.0'
-          cache: npm
       - name: Import finished V2 source tree
         run: |
           git clone --depth 1 --branch variant/agent-diaz-v2 https://github.com/Idruiz/agent-diaz-revived.git /tmp/agent-diaz-v2
