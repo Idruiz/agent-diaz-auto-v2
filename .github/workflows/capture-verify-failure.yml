@@ -1,0 +1,59 @@
+name: Capture JEFE AUTO Verify Failure
+
+on:
+  push:
+    branches:
+      - build/jefe-auto-v2
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.head_commit.message == 'Capture JEFE AUTO verify failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/jefe-auto-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+      - name: Install office validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-impress-nogui libreoffice-writer-nogui poppler-utils
+      - name: Install dependencies
+        run: npm ci
+      - name: Capture verify output
+        id: verify
+        shell: bash
+        run: |
+          set +e
+          npm run verify 2>&1 | tee /tmp/verify-full.log
+          status=${PIPESTATUS[0]}
+          {
+            echo "VERIFY_EXIT=$status"
+            echo "===== FAILURE SIGNALS ====="
+            grep -nEi "(FAIL|failed|error|AssertionError|expected|received|Test Files|Tests )" /tmp/verify-full.log | tail -n 200 || true
+            echo "===== FINAL 500 LINES ====="
+            tail -n 500 /tmp/verify-full.log
+          } > verify-failure.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit diagnostic evidence
+        run: |
+          git config user.name 'JEFE AUTO Diagnostics'
+          git config user.email 'actions@users.noreply.github.com'
+          git add verify-failure.txt
+          git commit -m 'Record JEFE AUTO verify failure evidence'
+          git push origin HEAD:build/jefe-auto-v2
+      - name: Preserve failure status
+        shell: bash
+        run: |
+          test "${{ steps.verify.outputs.status }}" = "0"
