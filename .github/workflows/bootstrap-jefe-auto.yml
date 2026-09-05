@@ -1,0 +1,52 @@
+name: Bootstrap JEFE AUTO V2
+
+on:
+  push:
+    branches:
+      - build/jefe-auto-v2
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.event.head_commit.message == 'Bootstrap JEFE AUTO V2 from finished Agent Diaz V2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/jefe-auto-v2
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+      - name: Import finished V2 source tree
+        run: |
+          git clone --depth 1 --branch variant/agent-diaz-v2 https://github.com/Idruiz/agent-diaz-revived.git /tmp/agent-diaz-v2
+          rsync -a --exclude='.git' /tmp/agent-diaz-v2/ ./
+      - name: Apply JEFE AUTO product and browser runtime changes
+        run: python scripts/customize_jefe_auto_v2.py
+      - name: Install pinned autonomous browser and display dependencies
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: |
+          npm install --save-exact \
+            @playwright/mcp@0.0.80 \
+            chrome-devtools-mcp@1.8.0 \
+            puppeteer@25.10.0 \
+            @fontsource/orbitron@5.3.0
+      - name: Typecheck
+        run: npm run check
+      - name: Run V2 and UI contract tests
+        run: npm test -- src/server/__tests__/agent-v2-runtime.test.ts src/web/jefe-auto-ui.test.ts
+      - name: Strict reviewed production audit
+        run: npm run audit:reviewed
+      - name: Commit independent JEFE AUTO V2 source
+        run: |
+          git config user.name 'JEFE AUTO Bootstrap'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Establish independent JEFE AUTO V2 product'
+          git push origin HEAD:build/jefe-auto-v2
