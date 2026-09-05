@@ -1,0 +1,30 @@
+{
+  "recordedAt": "2026-09-02",
+  "source": {
+    "branch": "main",
+    "sha": "fa29f91ac3ebb3fa6b99a58628f75927597ce038",
+    "workflowRunId": 33699924478,
+    "workflowJobId": 100476810782
+  },
+  "prompt": "create a taching presentation slide deck to teach the present tense in french, connect it to french culture and include slides to get the students to practice such as speed dating and 4 corners",
+  "provider": "mocked",
+  "llmCalls": 2,
+  "calls": [
+    "evidence",
+    "structure"
+  ],
+  "planAttempts": 1,
+  "buildAttempts": 1,
+  "repairAttempts": 0,
+  "wallTimeMsApprox": 2324,
+  "wallTimeEvidence": "sequential route segment from prior artifact completion at 2026-09-03T00:33:22.399Z to presentation completion at 2026-09-03T00:33:24.723Z",
+  "artifactsProduced": 1,
+  "artifact": {
+    "name": "Aujourd_hui_je_parle_franc_ais.pptx",
+    "bytes": 197151,
+    "sha256": "27288deb3e1def0846f75ae0e9ce31e227ddcec4b82499634e6a2661f98ae563",
+    "schemaFindingsOutsideAllowlist": 0,
+    "knownBenignFindings": 1,
+    "powerPointDesktopValidated": false
+  }
+}

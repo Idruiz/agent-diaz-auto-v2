@@ -1,0 +1,14 @@
+services:
+  agent-diaz:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      STORAGE_DIR: /app/storage
+    ports:
+      - "3000:3000"
+    volumes:
+      - diaz-storage:/app/storage
+
+volumes:
+  diaz-storage:

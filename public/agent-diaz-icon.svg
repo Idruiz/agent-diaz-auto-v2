@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Díaz</title>
+  <desc id="desc">A gold D inside a midnight-blue shield with alert red eyes.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#102f43"/><stop offset="1" stop-color="#06131d"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe7a1"/><stop offset=".45" stop-color="#d5a43a"/><stop offset="1" stop-color="#8c5f17"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity=".45"/></filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M256 34 438 96v145c0 116-73 191-182 237C147 432 74 357 74 241V96Z" fill="#071923" stroke="url(#gold)" stroke-width="14" filter="url(#shadow)"/>
+  <path d="M256 67 404 116v123c0 91-53 153-148 195-95-42-148-104-148-195V116Z" fill="#0d2a3b" opacity=".95"/>
+  <path d="M165 196 205 158 256 174 307 158 347 196 329 232 183 232Z" fill="#07131b"/>
+  <path d="M189 199 219 185 241 199 219 215Z" fill="#ff4f55"/>
+  <path d="M323 199 293 185 271 199 293 215Z" fill="#ff4f55"/>
+  <path d="M246 214h20l-10 15Z" fill="#d5a43a"/>
+  <path d="M184 279c21-35 46-52 72-52s51 17 72 52v91H184Z" fill="url(#gold)"/>
+  <path d="M218 290h67c0 32-13 51-34 51s-33-19-33-51Z" fill="#102f43"/>
+  <path d="M218 290h67" stroke="#ffe7a1" stroke-width="8" stroke-linecap="round"/>
+  <text x="256" y="324" text-anchor="middle" font-family="Georgia,serif" font-size="68" font-weight="700" fill="#ffe7a1">D</text>
+  <circle cx="409" cy="103" r="18" fill="#ff4f55" stroke="#ffe7a1" stroke-width="6"/>
+</svg>
