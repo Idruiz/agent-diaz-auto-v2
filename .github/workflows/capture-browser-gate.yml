@@ -1,0 +1,55 @@
+name: Capture JEFE AUTO Browser Gate
+
+on:
+  push:
+    branches:
+      - build/jefe-auto-v2
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    if: github.event.head_commit.message == 'Capture browser container gate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/jefe-auto-v2
+          fetch-depth: 0
+      - name: Build production image
+        run: docker build --tag jefe-auto-browser-diag:${{ github.sha }} .
+      - name: Capture exact browser gate
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '===== IMAGE / USER / PATH ====='
+            docker run --rm --entrypoint sh jefe-auto-browser-diag:${{ github.sha }} -lc 'id; echo HOME=$HOME; echo PATH=$PATH; pwd; ls -ld /app /app/node_modules /app/node_modules/.bin; command -v chromium || true; command -v npx || true; command -v node || true; ls -l /app/node_modules/.bin | grep -E "playwright|chrome-devtools|mcp" || true'
+            echo
+            echo '===== CHROMIUM ====='
+            docker run --rm --entrypoint chromium jefe-auto-browser-diag:${{ github.sha }} --version
+            echo "CHROMIUM_EXIT=$?"
+            echo
+            echo '===== PLAYWRIGHT MCP ====='
+            docker run --rm --entrypoint npx jefe-auto-browser-diag:${{ github.sha }} --no-install @playwright/mcp --help
+            echo "PLAYWRIGHT_MCP_EXIT=$?"
+            echo
+            echo '===== CHROME DEVTOOLS MCP ====='
+            docker run --rm --entrypoint npx jefe-auto-browser-diag:${{ github.sha }} --no-install chrome-devtools-mcp --help
+            echo "CHROME_DEVTOOLS_MCP_EXIT=$?"
+            echo
+            echo '===== PUPPETEER ====='
+            docker run --rm --entrypoint node jefe-auto-browser-diag:${{ github.sha }} --input-type=module -e 'import puppeteer from "puppeteer"; console.log("puppeteer", puppeteer.executablePath?.()); const browser = await puppeteer.launch({executablePath:"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]}); const page = await browser.newPage(); await page.setContent("<title>JEFE AUTO</title>"); console.log("title", await page.title()); await browser.close(); console.log("Puppeteer browser smoke passed");'
+            echo "PUPPETEER_EXIT=$?"
+          } > browser-gate-failure.txt 2>&1
+          cat browser-gate-failure.txt
+          exit 0
+      - name: Commit diagnostic evidence
+        run: |
+          git config user.name 'JEFE AUTO Diagnostics'
+          git config user.email 'actions@users.noreply.github.com'
+          git add browser-gate-failure.txt
+          git commit -m 'Record browser container gate evidence'
+          git push origin HEAD:build/jefe-auto-v2
