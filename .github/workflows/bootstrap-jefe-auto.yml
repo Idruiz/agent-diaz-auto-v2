@@ -27,7 +27,7 @@ jobs:
           rsync -a --exclude='.git' /tmp/agent-diaz-v2/ ./
       - name: Apply JEFE AUTO product and browser runtime changes
         run: python scripts/customize_jefe_auto_v2.py
-      - name: Narrow browser MCP contract test types
+      - name: Align browser MCP runtime contracts
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -36,7 +36,9 @@ jobs:
           old = '''    expect(definitions[0]?.fullCommand).toContain("@playwright/mcp");\n    expect(definitions[1]?.fullCommand).toContain("chrome-devtools-mcp");\n'''
           new = '''    const playwright = definitions[0];\n    const puppeteer = definitions[1];\n    expect(playwright?.transport).toBe("stdio");\n    expect(puppeteer?.transport).toBe("stdio");\n    if (playwright?.transport !== "stdio" || puppeteer?.transport !== "stdio")\n      throw new Error("Built-in browser MCPs must use stdio transport");\n    expect(playwright.fullCommand).toContain("@playwright/mcp");\n    expect(puppeteer.fullCommand).toContain("chrome-devtools-mcp");\n'''
           assert old in text, 'browser MCP test anchor missing'
-          p.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+          text = text.replace('.toThrow(/refuses host-level stdio MCP processes/);', '.toThrow(/refuses unreviewed host-level stdio MCP processes/);', 1)
+          p.write_text(text)
           PY
       - name: Install pinned autonomous browser and display dependencies
         env:
