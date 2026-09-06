@@ -135,9 +135,18 @@ function formatElapsed(ms: number): string {
 }
 
 function streamToolName(event: any): string | null {
+  const directName = event?.item?.toolName;
+  if (typeof directName === "string" && directName.trim())
+    return directName.replaceAll("__", " → ");
   const rawName = event?.item?.rawItem?.name;
   if (typeof rawName !== "string" || !rawName.trim()) return null;
   return rawName.replaceAll("__", " → ");
+}
+
+function streamRunItemType(item: unknown): string | null {
+  if (!item || typeof item !== "object") return null;
+  const type = (item as { type?: unknown }).type;
+  return typeof type === "string" ? type : null;
 }
 
 export function classifyV2BuildFailure(error: unknown): ClassifiedFailure {
@@ -470,9 +479,6 @@ export async function runV2ArtifactRuntime(
       src: recoveryFile.hostPath,
     });
 
-  // localFile() materializes only the explicitly attached file into the sandbox.
-  // Do not grant the agent its host upload directory: hosted/Docker sandboxes do
-  // not need it, and Unix-local should not receive broader host filesystem access.
   const manifest = new Manifest({
     root: "/workspace",
     entries: manifestEntries,
@@ -558,9 +564,6 @@ export async function runV2ArtifactRuntime(
       ],
       mcpServers,
       mcpConfig: {
-        // Browser MCP schemas contain constructs the strict converter cannot
-        // normalize. The SDK falls back to the original schemas anyway, but
-        // asking it to convert them floods production logs with false errors.
         convertSchemasToStrict: false,
         errorFunction: null,
         includeServerInToolNames: true,
@@ -569,8 +572,6 @@ export async function runV2ArtifactRuntime(
         reasoning: { effort: input.reasoningEffort },
         toolChoice: "required",
       },
-      // Force a tool on the first turn, then let the runner reset to auto so a
-      // successful agent is not trapped in a required-tool loop forever.
       resetToolChoice: true,
       toolUseBehavior: { stopAtToolNames: ["accept_validated_artifact"] },
     });
@@ -630,13 +631,10 @@ export async function runV2ArtifactRuntime(
         }
         if (event.type !== "run_item_stream_event") continue;
 
-        if (event.item.type === "tool_call_item") {
+        const itemType = streamRunItemType(event.item);
+        if (itemType === "tool_call_item") {
           lastTool = streamToolName(event) ?? "tool";
-          emitAgentProgress(
-            38,
-            `Using ${lastTool}`,
-            { tool: lastTool },
-          );
+          emitAgentProgress(38, `Using ${lastTool}`, { tool: lastTool });
           log("info", "agent_v2.tool_call_started", {
             jobId: input.jobId,
             kind: input.kind,
@@ -646,13 +644,11 @@ export async function runV2ArtifactRuntime(
           continue;
         }
 
-        if (event.item.type === "tool_call_output_item") {
+        if (itemType === "tool_call_output_item") {
           const completedTool = lastTool ?? "tool";
-          emitAgentProgress(
-            40,
-            `${completedTool} returned · agent continuing`,
-            { tool: completedTool },
-          );
+          emitAgentProgress(40, `${completedTool} returned · agent continuing`, {
+            tool: completedTool,
+          });
           log("info", "agent_v2.tool_call_completed", {
             jobId: input.jobId,
             kind: input.kind,
@@ -662,9 +658,11 @@ export async function runV2ArtifactRuntime(
           continue;
         }
 
-        if (event.item.type === "message_output_item") {
-          emitAgentProgress(42, "Agent completed a reasoning/output step · continuing toward validated artifact");
-        }
+        if (itemType === "message_output_item")
+          emitAgentProgress(
+            42,
+            "Agent completed a reasoning/output step · continuing toward validated artifact",
+          );
       }
       await stream.completed;
       result = stream;
@@ -711,7 +709,10 @@ export async function runV2ArtifactRuntime(
       telemetry: "streamed-tool-events-plus-heartbeat",
     };
 
-    emitAgentProgress(99, `Agent run complete · ${attempt} build attempt${attempt === 1 ? "" : "s"} · packaging download`);
+    emitAgentProgress(
+      99,
+      `Agent run complete · ${attempt} build attempt${attempt === 1 ? "" : "s"} · packaging download`,
+    );
     log("info", "agent_v2.run_completed", {
       jobId: input.jobId,
       kind: input.kind,
