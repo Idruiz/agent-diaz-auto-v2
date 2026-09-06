@@ -4,8 +4,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 const requireProxy = createRequire("/usr/local/lib/node_modules/mcp-proxy/package.json");
-const { Client } = requireProxy("@modelcontextprotocol/sdk/client/index.js");
-const { StreamableHTTPClientTransport } = requireProxy("@modelcontextprotocol/sdk/client/streamableHttp.js");
+const { Client, StreamableHTTPClientTransport } = requireProxy("@modelcontextprotocol/client");
 
 const requireGlobal = createRequire("/usr/local/lib/node_modules/puppeteer/package.json");
 const puppeteer = requireGlobal("puppeteer");
