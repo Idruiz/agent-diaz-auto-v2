@@ -51,6 +51,7 @@ const BUILTIN_BROWSER_MCP_NAMES = new Set([
 const DEFAULT_STDIO_TOOL_TIMEOUT_MS = 90_000;
 const SHARED_BROWSER_ENDPOINT = "http://127.0.0.1:9222";
 const SHARED_BROWSER_START_TIMEOUT_MS = 15_000;
+const BROWSER_MCP_NODE_HEAP_MB = 96;
 
 export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
 
@@ -60,6 +61,11 @@ function shellQuote(value: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function localMcpCommand(binary: string, args: string): string {
+  const executable = path.resolve(process.cwd(), "node_modules", ".bin", binary);
+  return `NODE_OPTIONS=${shellQuote(`--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`)} ${shellQuote(executable)} ${args}`;
 }
 
 export function browserAutonomyMode(
@@ -99,17 +105,25 @@ function builtInHostBrowserDefinitions(
   // On constrained Render instances, launching one Chromium per browser MCP
   // is enough to exceed the 512 MB service limit. In "both" mode JEFE starts
   // one host Chromium and both reviewed MCPs attach to that same CDP endpoint.
+  // Invoke the locally installed binaries directly so npx/npm wrapper Node
+  // processes do not remain resident beside both MCP servers.
   if (rawMode === "both") {
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
-      fullCommand: `npx --no-install @playwright/mcp --cdp-endpoint=${shellQuote(SHARED_BROWSER_ENDPOINT)}`,
+      fullCommand: localMcpCommand(
+        "playwright-mcp",
+        `--cdp-endpoint=${shellQuote(SHARED_BROWSER_ENDPOINT)}`,
+      ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
-      fullCommand: `npx --no-install chrome-devtools-mcp --browser-url=${shellQuote(SHARED_BROWSER_ENDPOINT)} --no-usage-statistics`,
+      fullCommand: localMcpCommand(
+        "chrome-devtools-mcp",
+        `--browser-url=${shellQuote(SHARED_BROWSER_ENDPOINT)} --no-usage-statistics`,
+      ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
     return definitions;
@@ -119,14 +133,20 @@ function builtInHostBrowserDefinitions(
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
-      fullCommand: `npx --no-install @playwright/mcp --headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
+      fullCommand: localMcpCommand(
+        "playwright-mcp",
+        `--headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
+      ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
   if (rawMode === "puppeteer")
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
-      fullCommand: `npx --no-install chrome-devtools-mcp --headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
+      fullCommand: localMcpCommand(
+        "chrome-devtools-mcp",
+        `--headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
+      ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
   return definitions;
@@ -381,7 +401,17 @@ async function startSharedBrowser(
       "--no-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      "--renderer-process-limit=2",
+      "--single-process",
+      "--no-zygote",
+      "--renderer-process-limit=1",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--metrics-recording-only",
+      "--mute-audio",
+      "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication",
       "--remote-debugging-address=127.0.0.1",
       "--remote-debugging-port=9222",
       `--user-data-dir=${userDataDir}`,
@@ -400,6 +430,7 @@ async function startSharedBrowser(
     jobId,
     executable: sharedBrowser.executable,
     endpoint: sharedBrowser.endpoint,
+    memoryMode: "constrained",
   });
   try {
     await waitForSharedBrowser(runtime, jobId);
