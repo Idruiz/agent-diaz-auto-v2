@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   MCPServerStdio,
   MCPServerStreamableHttp,
@@ -45,11 +49,17 @@ const BUILTIN_BROWSER_MCP_NAMES = new Set([
   "Puppeteer DevTools",
 ]);
 const DEFAULT_STDIO_TOOL_TIMEOUT_MS = 90_000;
+const SHARED_BROWSER_ENDPOINT = "http://127.0.0.1:9222";
+const SHARED_BROWSER_START_TIMEOUT_MS = 15_000;
 
 export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\"'\\"'`)}'`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function browserAutonomyMode(
@@ -85,14 +95,34 @@ function builtInHostBrowserDefinitions(
   const executable =
     env.AGENT_BROWSER_EXECUTABLE_PATH?.trim() || "/usr/bin/chromium";
   const definitions: V2McpDefinitions = [];
-  if (rawMode === "both" || rawMode === "playwright")
+
+  // On constrained Render instances, launching one Chromium per browser MCP
+  // is enough to exceed the 512 MB service limit. In "both" mode JEFE starts
+  // one host Chromium and both reviewed MCPs attach to that same CDP endpoint.
+  if (rawMode === "both") {
+    definitions.push({
+      transport: "stdio",
+      name: "Playwright Browser",
+      fullCommand: `npx --no-install @playwright/mcp --cdp-endpoint=${shellQuote(SHARED_BROWSER_ENDPOINT)}`,
+      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
+    });
+    definitions.push({
+      transport: "stdio",
+      name: "Puppeteer DevTools",
+      fullCommand: `npx --no-install chrome-devtools-mcp --browser-url=${shellQuote(SHARED_BROWSER_ENDPOINT)} --no-usage-statistics`,
+      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
+    });
+    return definitions;
+  }
+
+  if (rawMode === "playwright")
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
       fullCommand: `npx --no-install @playwright/mcp --headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
-  if (rawMode === "both" || rawMode === "puppeteer")
+  if (rawMode === "puppeteer")
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
@@ -102,12 +132,20 @@ function builtInHostBrowserDefinitions(
   return definitions;
 }
 
+interface SharedBrowserRuntime {
+  endpoint: string;
+  executable: string;
+  process?: ReturnType<typeof spawn>;
+  userDataDir?: string;
+}
+
 export interface V2McpRuntime {
   servers: V2McpServer[];
   descriptions: Array<{
     name: string;
     transport: "http" | "stdio";
   }>;
+  sharedBrowser?: SharedBrowserRuntime;
 }
 
 function enabled(value: string | undefined): boolean {
@@ -223,6 +261,20 @@ export function createV2McpRuntime(
   assertUniqueDefinitions(definitions);
   assertV2McpEnvironmentSafe(definitions, env);
 
+  const usesSharedBrowser =
+    !cloudflareExecutionPlane(env) &&
+    browserAutonomyMode(env) === "both" &&
+    definitions.some((item) => item.name === "Playwright Browser") &&
+    definitions.some((item) => item.name === "Puppeteer DevTools");
+
+  const sharedBrowser: SharedBrowserRuntime | undefined = usesSharedBrowser
+    ? {
+        endpoint: SHARED_BROWSER_ENDPOINT,
+        executable:
+          env.AGENT_BROWSER_EXECUTABLE_PATH?.trim() || "/usr/bin/chromium",
+      }
+    : undefined;
+
   const servers: V2McpServer[] = [];
   const descriptions: V2McpRuntime["descriptions"] = [];
   for (const definition of definitions) {
@@ -270,7 +322,116 @@ export function createV2McpRuntime(
     descriptions.push({ name: definition.name, transport: "stdio" });
   }
 
-  return { servers, descriptions };
+  return {
+    servers,
+    descriptions,
+    ...(sharedBrowser ? { sharedBrowser } : {}),
+  };
+}
+
+async function waitForSharedBrowser(
+  runtime: V2McpRuntime,
+  jobId: string,
+): Promise<void> {
+  const sharedBrowser = runtime.sharedBrowser;
+  if (!sharedBrowser?.process) return;
+  const startedAt = Date.now();
+  const versionUrl = `${sharedBrowser.endpoint}/json/version`;
+  for (;;) {
+    if (sharedBrowser.process.exitCode !== null)
+      throw new Error(
+        `Shared Chromium exited before CDP became ready (exit ${sharedBrowser.process.exitCode})`,
+      );
+    try {
+      const response = await fetch(versionUrl, {
+        signal: AbortSignal.timeout(750),
+      });
+      if (response.ok) {
+        log("info", "agent_v2.shared_browser_ready", {
+          jobId,
+          endpoint: sharedBrowser.endpoint,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+    } catch {
+      // Browser startup races are expected for a few hundred milliseconds.
+    }
+    if (Date.now() - startedAt >= SHARED_BROWSER_START_TIMEOUT_MS)
+      throw new Error(
+        `Shared Chromium did not expose CDP within ${SHARED_BROWSER_START_TIMEOUT_MS}ms`,
+      );
+    await sleep(100);
+  }
+}
+
+async function startSharedBrowser(
+  runtime: V2McpRuntime,
+  jobId: string,
+): Promise<void> {
+  const sharedBrowser = runtime.sharedBrowser;
+  if (!sharedBrowser || sharedBrowser.process) return;
+  const userDataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "diaz-shared-chromium-"),
+  );
+  const child = spawn(
+    sharedBrowser.executable,
+    [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--renderer-process-limit=2",
+      "--remote-debugging-address=127.0.0.1",
+      "--remote-debugging-port=9222",
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "about:blank",
+    ],
+    {
+      stdio: "ignore",
+      env: process.env,
+    },
+  );
+  sharedBrowser.process = child;
+  sharedBrowser.userDataDir = userDataDir;
+  log("info", "agent_v2.shared_browser_started", {
+    jobId,
+    executable: sharedBrowser.executable,
+    endpoint: sharedBrowser.endpoint,
+  });
+  try {
+    await waitForSharedBrowser(runtime, jobId);
+  } catch (error) {
+    await stopSharedBrowser(runtime, jobId);
+    throw error;
+  }
+}
+
+async function stopSharedBrowser(
+  runtime: V2McpRuntime,
+  jobId: string,
+): Promise<void> {
+  const sharedBrowser = runtime.sharedBrowser;
+  if (!sharedBrowser) return;
+  const child = sharedBrowser.process;
+  const userDataDir = sharedBrowser.userDataDir;
+  sharedBrowser.process = undefined;
+  sharedBrowser.userDataDir = undefined;
+  if (child && child.exitCode === null) {
+    child.kill("SIGTERM");
+    await sleep(250);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+  if (userDataDir) {
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+    } catch {
+      // Temp browser profiles are best-effort cleanup only.
+    }
+  }
+  log("info", "agent_v2.shared_browser_stopped", { jobId });
 }
 
 export async function connectV2McpServers(
@@ -279,6 +440,7 @@ export async function connectV2McpServers(
 ): Promise<void> {
   const connected: V2McpServer[] = [];
   try {
+    await startSharedBrowser(runtime, jobId);
     for (const server of runtime.servers) {
       const startedAt = Date.now();
       log("info", "agent_v2.mcp_server_connecting", {
@@ -301,6 +463,7 @@ export async function connectV2McpServers(
         // Preserve the original connection failure.
       }
     }
+    await stopSharedBrowser(runtime, jobId);
     log("error", "agent_v2.mcp_connect_failed", {
       jobId,
       configured: runtime.descriptions,
@@ -325,4 +488,5 @@ export async function closeV2McpServers(
       });
     }
   }
+  await stopSharedBrowser(runtime, jobId);
 }
