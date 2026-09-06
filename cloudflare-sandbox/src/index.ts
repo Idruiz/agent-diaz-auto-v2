@@ -3,7 +3,7 @@ import {
   Sandbox as BaseSandbox,
   getSandbox,
 } from "@cloudflare/sandbox";
-import { bridge, WarmPool } from "@cloudflare/sandbox/bridge";
+import { bridge, WarmPool, type BridgeEnv } from "@cloudflare/sandbox/bridge";
 
 const PLAYWRIGHT_PORT = 8931;
 const PUPPETEER_PORT = 8932;
@@ -13,7 +13,7 @@ const PUPPETEER_PROCESS = "jefe-puppeteer-mcp";
 
 type BrowserMode = "both" | "playwright" | "puppeteer" | "off";
 
-interface Env {
+interface Env extends BridgeEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
   WarmPool: DurableObjectNamespace<WarmPool>;
   JEFE_FS: R2Bucket;
@@ -190,7 +190,7 @@ async function proxyMcp(request: Request, env: Env, match: RegExpMatchArray): Pr
   return sandbox.fetch(proxyRequest);
 }
 
-export default bridge({
+const sandboxBridge = bridge({
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!authorized(request, env)) return new Response("Unauthorized", { status: 401 });
     const url = new URL(request.url);
@@ -219,3 +219,14 @@ export default bridge({
     }
   },
 });
+
+// The upstream bridge handles /v1 before the custom fetch handler and permits
+// unauthenticated requests when its secret is absent. Guard the whole surface.
+export default {
+  ...sandboxBridge,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    if (!authorized(request, env)) return new Response("Unauthorized", { status: 401 });
+    if (!sandboxBridge.fetch) throw new Error("Cloudflare bridge fetch handler is missing");
+    return sandboxBridge.fetch(request as Request<unknown, IncomingRequestCfProperties>, env, ctx);
+  },
+};

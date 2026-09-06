@@ -44,7 +44,7 @@ RUN npm install -g --omit=dev \
 
 RUN mkdir -p /workspace \
     && useradd -m -s /bin/bash -d /home/sandbox sandbox \
-    && chown sandbox:sandbox /workspace \
+    && chown -R sandbox:sandbox /workspace /home/sandbox \
     && chmod 700 /root
 
 EXPOSE 3000 8931 8932
