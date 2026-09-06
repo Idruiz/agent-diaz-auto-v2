@@ -78,6 +78,7 @@ jobs:
           rm -rf "$RENDER_DISK"
           mkdir -p "$RENDER_DISK"
           chmod 0777 "$RENDER_DISK"
+          # First production-container lifecycle: write durable state as the runtime user.
           docker run --rm \
             -e NODE_ENV=production \
             -e AGENT_SANDBOX_PROVIDER=render \
@@ -85,8 +86,17 @@ jobs:
             -v "$RENDER_DISK:/var/data" \
             --entrypoint node \
             jefe-auto-verify:${{ github.sha }} \
-            --input-type=module -e 'import fs from "node:fs"; import { createV2SandboxRuntime } from "./dist/server/v2/sandbox-runtime.js"; const runtime=createV2SandboxRuntime("render-ci", process.env); if(runtime.provider!=="render") process.exit(1); fs.mkdirSync("/var/data/ci",{recursive:true}); fs.writeFileSync("/var/data/ci/persistence-proof.txt","jefe-render-persistent"); if(fs.readFileSync("/var/data/ci/persistence-proof.txt","utf8")!=="jefe-render-persistent") process.exit(1); console.log("Render persistent filesystem smoke passed")'
-          test "$(cat "$RENDER_DISK/ci/persistence-proof.txt")" = "jefe-render-persistent"
+            --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("/var/data/ci",{recursive:true}); fs.writeFileSync("/var/data/ci/persistence-proof.txt","jefe-render-persistent"); if(fs.readFileSync("/var/data/ci/persistence-proof.txt","utf8")!=="jefe-render-persistent") process.exit(1); console.log("Render disk write passed")'
+          # Second lifecycle reads the same mounted bytes, exercising restart-shaped persistence.
+          docker run --rm \
+            -e NODE_ENV=production \
+            -e AGENT_SANDBOX_PROVIDER=render \
+            -e STORAGE_DIR=/var/data \
+            -v "$RENDER_DISK:/var/data" \
+            --entrypoint node \
+            jefe-auto-verify:${{ github.sha }} \
+            --input-type=module -e 'import fs from "node:fs"; const proof=fs.readFileSync("/var/data/ci/persistence-proof.txt","utf8"); if(proof!=="jefe-render-persistent") process.exit(1); fs.appendFileSync("/var/data/ci/persistence-proof.txt","-restart"); console.log("Render disk restart-shaped read passed")'
+          test "$(cat "$RENDER_DISK/ci/persistence-proof.txt")" = "jefe-render-persistent-restart"
       - name: Verify browser autonomy in production container
         run: |
           docker run --rm --entrypoint chromium jefe-auto-verify:${{ github.sha }} --version
