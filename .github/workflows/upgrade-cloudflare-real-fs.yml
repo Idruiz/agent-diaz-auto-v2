@@ -33,6 +33,13 @@ jobs:
               'let internalDefinitions: import("./mcp-runtime.js").V2InternalMcpDefinition[] = [];',
           )
           p.write_text(s)
+          t = Path('src/server/__tests__/agent-v2-runtime.test.ts')
+          s = t.read_text()
+          s = s.replace(
+              'expect(ready.ready).toBe(true);\n    expect(ready.mcpServerCount).toBe(2);',
+              'expect(ready.ready, JSON.stringify(ready)).toBe(true);\n    expect(ready.mcpServerCount).toBe(2);',
+          )
+          t.write_text(s)
           PY
       - name: Install root dependencies
         env:
