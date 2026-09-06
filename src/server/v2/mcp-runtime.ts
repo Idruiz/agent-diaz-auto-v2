@@ -65,7 +65,10 @@ function sleep(ms: number): Promise<void> {
 
 function localMcpCommand(binary: string, args: string): string {
   const executable = path.resolve(process.cwd(), "node_modules", ".bin", binary);
-  return `NODE_OPTIONS=${shellQuote(`--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`)} ${shellQuote(executable)} ${args}`;
+  // MCPServerStdio parses fullCommand into an executable + argv; a leading
+  // VAR=value token is therefore treated as the executable and fails ENOENT.
+  // Use /usr/bin/env so NODE_OPTIONS is applied without requiring a shell.
+  return `/usr/bin/env NODE_OPTIONS=${shellQuote(`--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`)} ${shellQuote(executable)} ${args}`;
 }
 
 export function browserAutonomyMode(
