@@ -11,6 +11,7 @@ import { ensureDirs } from "./files.js";
 import { apiRoutes } from "./routes.js";
 import { presentationExportRoutes } from "./presentation-exports.js";
 import { AgentRunner } from "./openai-agent.js";
+import { installArtifactExecutionGate } from "./artifact-execution-gate.js";
 import { log } from "./log.js";
 import { probeV2RuntimeReadiness } from "./v2/host-preflight.js";
 
@@ -19,6 +20,10 @@ ensureDirs(config.dataDir, config.artifactDir, config.uploadDir);
 const db = openDatabase(config);
 const auth = createAuth(config, db);
 const runner = new AgentRunner(config, db);
+// One Render instance must never launch multiple Chromium-backed artifact
+// runtimes at once. The DB remains the durable queue, so runner.resume() below
+// can safely enqueue every interrupted artifact after a process restart.
+installArtifactExecutionGate(runner, db);
 const packageMeta = JSON.parse(fs.readFileSync(path.join(config.root, "package.json"), "utf8")) as { version: string; dependencies?: Record<string, string> };
 const exactDependencyVersion = (name: string) => String(packageMeta.dependencies?.[name] ?? "unknown").replace(/^[^0-9]*/, "");
 const agentRuntimeReadiness = await probeV2RuntimeReadiness(process.env);
