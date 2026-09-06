@@ -35,6 +35,10 @@ describe("Render shared Chromium MCP configuration", () => {
     expect(puppeteerCommand).toContain("node_modules/.bin/chrome-devtools-mcp");
     expect(playwrightCommand).toContain("--max-old-space-size=96");
     expect(puppeteerCommand).toContain("--max-old-space-size=96");
+    expect(playwrightCommand).toMatch(/^\/usr\/bin\/env NODE_OPTIONS=/);
+    expect(puppeteerCommand).toMatch(/^\/usr\/bin\/env NODE_OPTIONS=/);
+    expect(playwrightCommand).not.toMatch(/^NODE_OPTIONS=/);
+    expect(puppeteerCommand).not.toMatch(/^NODE_OPTIONS=/);
     expect(playwrightCommand).not.toContain("npx ");
     expect(puppeteerCommand).not.toContain("npx ");
     expect(playwrightCommand).not.toContain("--executable-path");
@@ -61,5 +65,7 @@ describe("Render shared Chromium MCP configuration", () => {
     expect(puppeteerCommand).toContain("--executablePath");
     expect(playwrightCommand).toContain("--max-old-space-size=96");
     expect(puppeteerCommand).toContain("--max-old-space-size=96");
+    expect(playwrightCommand).toMatch(/^\/usr\/bin\/env NODE_OPTIONS=/);
+    expect(puppeteerCommand).toMatch(/^\/usr\/bin\/env NODE_OPTIONS=/);
   });
 });
