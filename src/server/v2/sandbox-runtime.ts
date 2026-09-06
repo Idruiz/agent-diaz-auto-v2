@@ -38,7 +38,7 @@ export function resolveV2SandboxProvider(
     )
       return explicit;
     throw new Error(
-      `AGENT_SANDBOX_PROVIDER must be cloudflare, docker, or unix, with render also supported; received '${env.AGENT_SANDBOX_PROVIDER}'`,
+      `AGENT_SANDBOX_PROVIDER must be cloudflare, docker, render, or unix; received '${env.AGENT_SANDBOX_PROVIDER}'`,
     );
   }
   if (env.CLOUDFLARE_SANDBOX_WORKER_URL?.trim()) return "cloudflare";
@@ -127,9 +127,13 @@ export function createV2SandboxRuntime(
       provider,
       hosted: true,
       persistentFilesystem: storageDir,
+      workspaceBaseDir: storageDir,
       executionPlane: "render-service",
     });
-    return { provider, client: new UnixLocalSandboxClient() };
+    return {
+      provider,
+      client: new UnixLocalSandboxClient({ workspaceBaseDir: storageDir }),
+    };
   }
 
   log(
