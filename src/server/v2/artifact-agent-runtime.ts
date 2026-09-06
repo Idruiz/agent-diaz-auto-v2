@@ -37,6 +37,10 @@ import {
 } from "./revision-ledger.js";
 import { createV2SandboxRuntime } from "./sandbox-runtime.js";
 import {
+  cloudflareSandboxIdFromSession,
+  prepareCloudflareWorkspace,
+} from "./cloudflare-workspace.js";
+import {
   ArtifactPlanSchema,
   type ArtifactPlan,
   type JobKind,
@@ -145,7 +149,7 @@ export function classifyV2BuildFailure(error: unknown): ClassifiedFailure {
 export function v2ArtifactAgentInstructions(kind: JobKind): string {
   return [
     `You are Agent Díaz V2, a production artifact engineer responsible for a finished ${kind}.`,
-    "You are operating inside a real sandbox workspace with filesystem editing and shell access. Use the workspace actively: keep research notes, a current plan, and revision notes instead of trying to hold the entire job in chat context.",
+    "You are operating inside a real sandbox workspace with filesystem editing and shell access. Use the workspace actively: keep research notes, a current plan, and revision notes instead of trying to hold the entire job in chat context. In the hosted Cloudflare runtime, /workspace is the fast Linux workspace and /workspace/persist is an R2-backed filesystem mount that survives sandbox destruction; keep durable notes and browser outputs under /workspace/persist.",
     "You have web search and code execution. Research factual/current claims when needed; use code execution for uploaded datasets and quantitative work. Never invent evidence or numbers.",
     "If MCP tools are present, use them when they materially improve the task. Treat MCP as an external capability layer, not as a substitute for the sandbox filesystem.",
     "The build_and_validate_artifact tool is the only authority on whether an artifact is technically ready. It runs the real Agent Díaz renderer and deterministic validators.",
@@ -376,10 +380,8 @@ export async function runV2ArtifactRuntime(
   });
 
   let sandboxRuntime: ReturnType<typeof createV2SandboxRuntime>;
-  let mcpRuntime: ReturnType<typeof createV2McpRuntime>;
   try {
     sandboxRuntime = createV2SandboxRuntime(input.jobId);
-    mcpRuntime = createV2McpRuntime(input.config);
   } catch (error) {
     throw new ArtifactPipelineError(
       "INFRA",
@@ -387,34 +389,82 @@ export async function runV2ArtifactRuntime(
       { ruleOrPart: "agent-v2-configuration", cause: error },
     );
   }
-  const mcpServers = mcpRuntime.servers;
 
-  const agent = new SandboxAgent({
-    name: "Agent Díaz V2 Artifact Engineer",
-    model: input.model,
-    instructions: v2ArtifactAgentInstructions(input.kind),
-    defaultManifest: manifest,
-    tools: [
-      webSearchTool({ searchContextSize: "medium" }),
-      codeInterpreterTool(),
-      buildTool,
-      acceptTool,
-    ],
-    mcpServers,
-    mcpConfig: {
-      convertSchemasToStrict: true,
-      errorFunction: null,
-      includeServerInToolNames: true,
-    },
-    modelSettings: {
-      reasoning: { effort: input.reasoningEffort },
-      toolChoice: "required",
-    },
-    resetToolChoice: false,
-    toolUseBehavior: { stopAtToolNames: ["accept_validated_artifact"] },
-  });
-
+  let sandboxSession: any = null;
+  let mcpRuntime: ReturnType<typeof createV2McpRuntime> | null = null;
   try {
+    try {
+      sandboxSession = await sandboxRuntime.client.create({ manifest });
+    } catch (error) {
+      throw new ArtifactPipelineError(
+        "INFRA",
+        `Agent Díaz V2 sandbox creation failed: ${error instanceof Error ? error.message : String(error)}`,
+        { ruleOrPart: "agent-v2-sandbox-create", cause: error },
+      );
+    }
+
+    let internalDefinitions: import("./mcp-runtime.js").V2InternalMcpDefinition[] = [];
+    let persistentPath: string | null = null;
+    if (sandboxRuntime.provider === "cloudflare") {
+      try {
+        const sandboxId = cloudflareSandboxIdFromSession(sandboxSession);
+        const prepared = await prepareCloudflareWorkspace({
+          jobId: input.jobId,
+          sandboxId,
+          workerUrl: process.env.CLOUDFLARE_SANDBOX_WORKER_URL ?? "",
+          apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY ?? "",
+          env: process.env,
+          signal: input.signal,
+        });
+        internalDefinitions = prepared.mcpDefinitions;
+        persistentPath = prepared.persistentPath;
+      } catch (error) {
+        throw new ArtifactPipelineError(
+          "INFRA",
+          `Agent Díaz V2 Cloudflare workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+          { ruleOrPart: "agent-v2-cloudflare-workspace", cause: error },
+        );
+      }
+    }
+
+    try {
+      mcpRuntime = createV2McpRuntime(input.config, process.env, {
+        internalDefinitions,
+      });
+    } catch (error) {
+      throw new ArtifactPipelineError(
+        "INFRA",
+        `Agent Díaz V2 MCP configuration failed: ${error instanceof Error ? error.message : String(error)}`,
+        { ruleOrPart: "agent-v2-configuration", cause: error },
+      );
+    }
+    const mcpServers = mcpRuntime.servers;
+
+    const agent = new SandboxAgent({
+      name: "Agent Díaz V2 Artifact Engineer",
+      model: input.model,
+      instructions: v2ArtifactAgentInstructions(input.kind),
+      defaultManifest: manifest,
+      tools: [
+        webSearchTool({ searchContextSize: "medium" }),
+        codeInterpreterTool(),
+        buildTool,
+        acceptTool,
+      ],
+      mcpServers,
+      mcpConfig: {
+        convertSchemasToStrict: true,
+        errorFunction: null,
+        includeServerInToolNames: true,
+      },
+      modelSettings: {
+        reasoning: { effort: input.reasoningEffort },
+        toolChoice: "required",
+      },
+      resetToolChoice: false,
+      toolUseBehavior: { stopAtToolNames: ["accept_validated_artifact"] },
+    });
+
     try {
       await connectV2McpServers(mcpRuntime, input.jobId);
     } catch (error) {
@@ -424,6 +474,7 @@ export async function runV2ArtifactRuntime(
         { ruleOrPart: "agent-v2-mcp-connect", cause: error },
       );
     }
+
     log("info", "agent_v2.run_started", {
       jobId: input.jobId,
       kind: input.kind,
@@ -432,7 +483,9 @@ export async function runV2ArtifactRuntime(
       mcpEnabled: mcpServers.length > 0,
       mcpServers: mcpRuntime.descriptions,
       sandboxProvider: sandboxRuntime.provider,
+      persistentPath,
     });
+
     let result: any;
     try {
       result = await run(
@@ -441,14 +494,7 @@ export async function runV2ArtifactRuntime(
         {
           maxTurns: null,
           signal: input.signal,
-          sandbox: {
-            client: sandboxRuntime.client,
-            concurrencyLimits: {
-              manifestEntries: 4,
-              localDirFiles: 12,
-            },
-            archiveLimits: {},
-          },
+          sandbox: { session: sandboxSession },
         },
       );
     } catch (error: any) {
@@ -481,6 +527,9 @@ export async function runV2ArtifactRuntime(
       version: "v2",
       harness: "@openai/agents",
       sandbox: sandboxRuntime.provider,
+      persistentFilesystem: persistentPath,
+      browserExecutionPlane:
+        sandboxRuntime.provider === "cloudflare" ? "same-sandbox" : "host-compatible",
       mcp: mcpRuntime.descriptions,
       attempts: attempt,
       acceptance: "explicit-validated-build",
@@ -501,6 +550,14 @@ export async function runV2ArtifactRuntime(
       finalOutput: result.finalOutput,
     };
   } finally {
-    await closeV2McpServers(mcpRuntime, input.jobId);
+    if (mcpRuntime) await closeV2McpServers(mcpRuntime, input.jobId);
+    try {
+      await sandboxSession?.close?.();
+    } catch (error) {
+      log("warn", "agent_v2.sandbox_close_failed", {
+        jobId: input.jobId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

@@ -7,6 +7,7 @@ import {
   v2ArtifactAgentInstructions,
 } from "../v2/artifact-agent-runtime.js";
 import { buildFailureToolOutput } from "../v2/diagnostic-evidence.js";
+import { prepareCloudflareWorkspace } from "../v2/cloudflare-workspace.js";
 import {
   assertV2McpEnvironmentSafe,
   parseV2McpDefinitions,
@@ -133,9 +134,10 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
     ).not.toThrow();
   });
 
-  it("loads Playwright and Puppeteer browser MCPs as built-in autonomous tools", () => {
+  it("keeps host browser MCPs for non-Cloudflare compatibility runtimes", () => {
     const definitions = parseV2McpDefinitions(undefined, {
       NODE_ENV: "production",
+      AGENT_SANDBOX_PROVIDER: "unix",
       AGENT_BROWSER_AUTONOMY: "both",
       AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
     });
@@ -144,17 +146,57 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
       "Puppeteer DevTools",
     ]);
     expect(definitions.every((definition) => definition.transport === "stdio")).toBe(true);
-    const playwright = definitions[0];
-    const puppeteer = definitions[1];
-    expect(playwright?.transport).toBe("stdio");
-    expect(puppeteer?.transport).toBe("stdio");
-    if (playwright?.transport !== "stdio" || puppeteer?.transport !== "stdio")
-      throw new Error("Built-in browser MCPs must use stdio transport");
-    expect(playwright.fullCommand).toContain("@playwright/mcp");
-    expect(puppeteer.fullCommand).toContain("chrome-devtools-mcp");
-    expect(() =>
-      assertV2McpEnvironmentSafe(definitions, { NODE_ENV: "production" }),
-    ).not.toThrow();
+  });
+
+  it("never launches Cloudflare production browser MCPs on the Render host", () => {
+    const definitions = parseV2McpDefinitions(undefined, {
+      NODE_ENV: "production",
+      AGENT_SANDBOX_PROVIDER: "cloudflare",
+      CLOUDFLARE_SANDBOX_WORKER_URL: "https://sandbox.example.workers.dev",
+      AGENT_BROWSER_AUTONOMY: "both",
+    });
+    expect(definitions).toEqual([]);
+  });
+
+  it("prepares authenticated in-sandbox browser MCPs over the Cloudflare R2 filesystem", async () => {
+    let authorization = "";
+    let body = "";
+    const prepared = await prepareCloudflareWorkspace({
+      jobId: "job-123",
+      sandboxId: "cf-123",
+      workerUrl: "https://sandbox.example.workers.dev",
+      apiKey: "bridge-secret",
+      env: {
+        NODE_ENV: "production",
+        AGENT_BROWSER_AUTONOMY: "both",
+      },
+      fetchImpl: async (_input, init) => {
+        authorization = new Headers(init?.headers).get("authorization") ?? "";
+        body = String(init?.body ?? "");
+        return Response.json({
+          ok: true,
+          sandboxId: "cf-123",
+          workspaceRoot: "/workspace",
+          persistentPath: "/workspace/persist",
+          filesystem: {
+            kind: "linux-r2-mounted",
+            posix: true,
+            persistent: true,
+          },
+          browsers: { playwright: true, puppeteer: true },
+        });
+      },
+    });
+    expect(authorization).toBe("Bearer bridge-secret");
+    expect(JSON.parse(body)).toMatchObject({ jobId: "job-123", sandboxId: "cf-123" });
+    expect(prepared.persistentPath).toBe("/workspace/persist");
+    expect(prepared.filesystem).toMatchObject({ posix: true, persistent: true });
+    expect(prepared.mcpDefinitions.map((item) => [item.name, item.transport])).toEqual([
+      ["Playwright Browser", "http"],
+      ["Puppeteer DevTools", "http"],
+    ]);
+    expect(JSON.stringify(prepared.mcpDefinitions)).not.toContain("bridge-secret");
+    expect(prepared.mcpDefinitions.every((item) => item.authorization === "Bearer bridge-secret")).toBe(true);
   });
 
   it("prefers the hosted Cloudflare sandbox whenever a bridge URL is configured", () => {
@@ -204,7 +246,32 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
       CLOUDFLARE_SANDBOX_API_KEY: "super-secret-value",
     });
     expect(ready.ready).toBe(true);
+    expect(ready.mcpServerCount).toBe(2);
     expect(JSON.stringify(ready)).not.toContain("super-secret-value");
+  });
+
+  it("requires an authenticated Cloudflare bridge in production", () => {
+    expect(() =>
+      assertV2SandboxProviderReady("cloudflare", {
+        NODE_ENV: "production",
+        CLOUDFLARE_SANDBOX_WORKER_URL: "https://sandbox.example.workers.dev",
+      }),
+    ).toThrow(/CLOUDFLARE_SANDBOX_API_KEY/);
+  });
+
+  it("rejects custom MCP JSON that impersonates a reserved built-in browser", () => {
+    expect(() =>
+      parseV2McpDefinitions(
+        JSON.stringify([
+          {
+            transport: "stdio",
+            name: "Playwright Browser",
+            fullCommand: "evil-browser-wrapper",
+          },
+        ]),
+        { NODE_ENV: "production", AGENT_BROWSER_AUTONOMY: "off" },
+      ),
+    ).toThrow(/reserved/);
   });
 
   it("returns failed artifact bytes to the model as diagnostic file output", async () => {

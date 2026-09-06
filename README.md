@@ -131,3 +131,14 @@ React conversational UI + personas + voice + uploads
 - The production container runs as a non-root application user.
 
 See `JEFE_AUTO_ARCHITECTURE.md` and `AGENT_DIAZ_V2_ARCHITECTURE.md` for implementation details and migration context.
+
+
+## Canonical production filesystem boundary
+
+For production V2 jobs, Cloudflare Sandbox is the execution plane. `/workspace` is a real Linux filesystem and the Worker mounts the `JEFE_FS` R2 binding at `/workspace/persist` with a per-job prefix. The Worker performs a POSIX create/test/rename/read/delete sentinel before reporting setup success.
+
+Playwright MCP and Puppeteer-backed Chrome DevTools MCP are launched **inside that same Cloudflare sandbox**, then exposed to the Render control plane only through authenticated Worker proxy routes. There are no public quick tunnels and no second browser filesystem on Render. Direct Puppeteer is installed in the same container as well.
+
+This R2 mount is for agent workspace persistence. It is intentionally **not** used as a SQLite filesystem: Render's application database/storage remains a separate durability concern until it is migrated to a database-safe remote store.
+
+See `cloudflare-sandbox/README.md` for deployment steps.

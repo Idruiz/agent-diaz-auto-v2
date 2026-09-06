@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "build/**"
+      - "upgrade/**"
   pull_request:
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.12.0"
+          node-version: "22.23.2"
           cache: npm
       - name: Install office render validators
         run: |
@@ -63,6 +64,18 @@ jobs:
             jefe-auto-regression:${{ github.sha }} \
             npx vitest run --root . src/server/__tests__/agent.test.ts \
               -t "completes every artifact route through evidence, structure, build, validation, and persistence"
+      - name: Verify Cloudflare sandbox execution plane
+        working-directory: cloudflare-sandbox
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run typecheck
+          npm run verify:contract
+      - name: Build Cloudflare sandbox browser image
+        run: docker build --tag jefe-auto-cloudflare-sandbox:${{ github.sha }} cloudflare-sandbox
+      - name: Verify Cloudflare sandbox browser image
+        run: |
+          docker run --rm --entrypoint sh jefe-auto-cloudflare-sandbox:${{ github.sha }} -lc 'set -eu; test -d /workspace; test -w /workspace; chromium --version; playwright-mcp --help >/dev/null; chrome-devtools-mcp --help >/dev/null; mcp-proxy --help >/dev/null; NODE_PATH=/usr/local/lib/node_modules node -e "const p=require(\"puppeteer\"); if (!p.launch) process.exit(1); console.log(\"Cloudflare Puppeteer module smoke passed\")"'
+          docker run --rm --entrypoint node -v "$PWD:/checks:ro" jefe-auto-cloudflare-sandbox:${{ github.sha }} /checks/scripts/cloudflare-browser-smoke.mjs
       - name: Build production container
         run: docker build --tag jefe-auto-verify:${{ github.sha }} .
       - name: Verify browser autonomy in production container

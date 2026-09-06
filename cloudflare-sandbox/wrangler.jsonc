@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jefe-auto-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  },
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "standard-1",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "class_name": "Sandbox", "name": "Sandbox" },
+      { "class_name": "WarmPool", "name": "WarmPool" }
+    ]
+  },
+  "migrations": [
+    { "new_sqlite_classes": ["Sandbox"], "tag": "v1" },
+    { "new_sqlite_classes": ["WarmPool"], "tag": "v2" }
+  ],
+  "r2_buckets": [
+    { "binding": "JEFE_FS", "bucket_name": "jefe-auto-fs" }
+  ],
+  "vars": {
+    "SANDBOX_TRANSPORT": "rpc",
+    "WARM_POOL_TARGET": "0",
+    "WARM_POOL_REFRESH_INTERVAL": "10000",
+    "WARM_POOL_MAX_INSTANCES": "1",
+    "WARM_POOL_SCALE_BATCH_SIZE": "1"
+  },
+  "preview_urls": false
+}

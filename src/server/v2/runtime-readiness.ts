@@ -1,5 +1,6 @@
 import {
   assertV2McpEnvironmentSafe,
+  browserAutonomyMode,
   parseV2McpDefinitions,
 } from "./mcp-runtime.js";
 import {
@@ -38,6 +39,10 @@ export function inspectV2RuntimeReadiness(
   try {
     sandboxProvider = resolveV2SandboxProvider(env);
     assertV2SandboxProviderReady(sandboxProvider, env);
+    if (sandboxProvider === "cloudflare")
+      warnings.push(
+        "Cloudflare readiness verifies control-plane configuration; the R2 filesystem mount and in-sandbox browser MCPs are probed when each sandbox job is prepared.",
+      );
     if (sandboxProvider === "docker")
       warnings.push(
         "Docker sandbox readiness is verified when the first sandbox session is created; the host must expose a working Docker daemon.",
@@ -57,6 +62,11 @@ export function inspectV2RuntimeReadiness(
     const definitions = parseV2McpDefinitions(env.MCP_SERVERS_JSON, env);
     assertV2McpEnvironmentSafe(definitions, env);
     mcpServerCount += definitions.length;
+    if (sandboxProvider === "cloudflare") {
+      const mode = browserAutonomyMode(env);
+      if (mode === "both") mcpServerCount += 2;
+      else if (mode === "playwright" || mode === "puppeteer") mcpServerCount += 1;
+    }
   } catch (error) {
     issues.push(error instanceof Error ? error.message : String(error));
   }

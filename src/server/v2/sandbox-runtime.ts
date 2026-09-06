@@ -45,6 +45,14 @@ export function assertV2SandboxProviderReady(
       "AGENT_SANDBOX_PROVIDER=cloudflare requires CLOUDFLARE_SANDBOX_WORKER_URL",
     );
   if (
+    provider === "cloudflare" &&
+    env.NODE_ENV === "production" &&
+    !env.CLOUDFLARE_SANDBOX_API_KEY?.trim()
+  )
+    throw new Error(
+      "JEFE//AUTO production Cloudflare sandbox requires CLOUDFLARE_SANDBOX_API_KEY so workspace and browser MCP proxy routes are authenticated",
+    );
+  if (
     provider === "unix" &&
     env.NODE_ENV === "production" &&
     !enabled(env.AGENT_SANDBOX_ALLOW_UNSAFE_UNIX)
@@ -77,6 +85,7 @@ export function createV2SandboxRuntime(
       jobId,
       provider,
       hosted: true,
+      persistentFilesystem: "/workspace/persist",
     });
     return { provider, client };
   }

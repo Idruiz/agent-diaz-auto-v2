@@ -35,27 +35,51 @@ const McpDefinitionsSchema = z.array(McpDefinitionSchema).max(12);
 export type V2McpDefinition = z.infer<typeof McpDefinitionSchema>;
 export type V2McpDefinitions = z.infer<typeof McpDefinitionsSchema>;
 export type V2McpServer = MCPServerStreamableHttp | MCPServerStdio;
+export type V2InternalMcpDefinition = V2McpDefinition & {
+  authorization?: string;
+};
 
 const BUILTIN_BROWSER_MCP_NAMES = new Set([
   "Playwright Browser",
   "Puppeteer DevTools",
 ]);
 
+export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
+
 function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\"'\"'`)}'`;
+  return `'${value.replaceAll("'", `'\\"'\\"'`)}'`;
 }
 
-function builtInBrowserDefinitions(
+export function browserAutonomyMode(
   env: NodeJS.ProcessEnv = process.env,
-): V2McpDefinitions {
+): BrowserAutonomyMode {
   const rawMode =
     env.AGENT_BROWSER_AUTONOMY?.trim().toLocaleLowerCase() ||
     (env.NODE_ENV === "test" ? "off" : "both");
-  if (["off", "none", "false", "0"].includes(rawMode)) return [];
-  if (!["both", "playwright", "puppeteer"].includes(rawMode))
-    throw new Error(
-      "AGENT_BROWSER_AUTONOMY must be both, playwright, puppeteer, or off",
-    );
+  if (["off", "none", "false", "0"].includes(rawMode)) return "off";
+  if (rawMode === "both" || rawMode === "playwright" || rawMode === "puppeteer")
+    return rawMode;
+  throw new Error(
+    "AGENT_BROWSER_AUTONOMY must be both, playwright, puppeteer, or off",
+  );
+}
+
+function cloudflareExecutionPlane(env: NodeJS.ProcessEnv): boolean {
+  const explicit = env.AGENT_SANDBOX_PROVIDER?.trim().toLocaleLowerCase();
+  if (explicit) return explicit === "cloudflare";
+  return Boolean(env.CLOUDFLARE_SANDBOX_WORKER_URL?.trim());
+}
+
+function builtInHostBrowserDefinitions(
+  env: NodeJS.ProcessEnv = process.env,
+): V2McpDefinitions {
+  // Cloudflare production browser tools are started inside the sandbox and
+  // injected later as authenticated Streamable HTTP MCP servers. Never spawn
+  // a second browser on the Render host in that mode.
+  if (cloudflareExecutionPlane(env)) return [];
+
+  const rawMode = browserAutonomyMode(env);
+  if (rawMode === "off") return [];
   const executable =
     env.AGENT_BROWSER_EXECUTABLE_PATH?.trim() || "/usr/bin/chromium";
   const definitions: V2McpDefinitions = [];
@@ -63,13 +87,13 @@ function builtInBrowserDefinitions(
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
-      fullCommand: `npx --no-install @playwright/mcp --headless --isolated --executable-path ${shellQuote(executable)}`,
+      fullCommand: `npx --no-install @playwright/mcp --headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
     });
   if (rawMode === "both" || rawMode === "puppeteer")
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
-      fullCommand: `npx --no-install chrome-devtools-mcp --headless --isolated --executable-path ${shellQuote(executable)} --no-usage-statistics`,
+      fullCommand: `npx --no-install chrome-devtools-mcp --headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
     });
   return definitions;
 }
@@ -86,15 +110,16 @@ function enabled(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/i.test(value?.trim() ?? "");
 }
 
-function uniqueDefinitions(definitions: V2McpDefinitions): V2McpDefinitions {
+function assertUniqueDefinitions(
+  definitions: readonly { name: string }[],
+): void {
   const seen = new Set<string>();
-  return definitions.filter((definition) => {
+  for (const definition of definitions) {
     const key = definition.name.trim().toLocaleLowerCase();
     if (seen.has(key))
       throw new Error(`Duplicate MCP server name '${definition.name}'`);
     seen.add(key);
-    return true;
-  });
+  }
 }
 
 export function parseV2McpDefinitions(
@@ -118,12 +143,21 @@ export function parseV2McpDefinitions(
         .map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`)
         .join("; ")}`,
     );
-  return uniqueDefinitions(
-    McpDefinitionsSchema.parse([
-      ...result.data,
-      ...builtInBrowserDefinitions(env),
-    ]),
-  );
+
+  // Reserved names identify audited first-party browser processes. Do not let
+  // user JSON borrow one of those names and accidentally inherit its trust.
+  for (const definition of result.data)
+    if (BUILTIN_BROWSER_MCP_NAMES.has(definition.name))
+      throw new Error(
+        `MCP server name '${definition.name}' is reserved for JEFE//AUTO built-in browser tooling`,
+      );
+
+  const definitions = [
+    ...result.data,
+    ...builtInHostBrowserDefinitions(env),
+  ];
+  assertUniqueDefinitions(definitions);
+  return definitions;
 }
 
 export function assertV2McpEnvironmentSafe(
@@ -158,8 +192,12 @@ function toolFilterFor(definition: V2McpDefinition) {
 export function createV2McpRuntime(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,
+  options: { internalDefinitions?: V2InternalMcpDefinition[] } = {},
 ): V2McpRuntime {
-  const definitions = parseV2McpDefinitions(env.MCP_SERVERS_JSON, env);
+  const definitions: V2InternalMcpDefinition[] = [
+    ...parseV2McpDefinitions(env.MCP_SERVERS_JSON, env),
+    ...(options.internalDefinitions ?? []),
+  ];
 
   if (config.MCP_SERVER_URL) {
     const fallbackName = config.MCP_SERVER_LABEL || "Agent Diaz MCP";
@@ -178,6 +216,7 @@ export function createV2McpRuntime(
       });
   }
 
+  assertUniqueDefinitions(definitions);
   assertV2McpEnvironmentSafe(definitions, env);
 
   const servers: V2McpServer[] = [];
@@ -185,11 +224,13 @@ export function createV2McpRuntime(
   for (const definition of definitions) {
     const toolFilter = toolFilterFor(definition);
     if (definition.transport === "http") {
-      const authorization = definition.authorizationEnv
-        ? env[definition.authorizationEnv]
-        : config.MCP_SERVER_URL === definition.url
-          ? config.MCP_AUTHORIZATION
-          : undefined;
+      const authorization =
+        definition.authorization ??
+        (definition.authorizationEnv
+          ? env[definition.authorizationEnv]
+          : config.MCP_SERVER_URL === definition.url
+            ? config.MCP_AUTHORIZATION
+            : undefined);
       if (definition.authorizationEnv && !authorization)
         throw new Error(
           `MCP server '${definition.name}' requires environment variable ${definition.authorizationEnv}`,

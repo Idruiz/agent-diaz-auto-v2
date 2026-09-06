@@ -313,3 +313,8 @@ REASON: Friendly title-derived filenames could collide across concurrent or hist
 
 DECISION: Mocked provider tests are labeled as mocked; real-provider acceptance is a separate explicit harness.
 REASON: Green fixtures are not evidence that the live model/provider path works.
+# 2026-09-06: Cloudflare upgrade gate repair
+
+Failed run 34006955053 exposed two concrete defects: enumerable bridge authorization in browser MCP definitions and missing LibreOffice in the upgrade workflow. Keep transport authorization readable but non-enumerable; retain the original redaction assertion. Materialize the existing upgrade in source and retire the self-modifying CI script/workflow. The permanent Verify workflow now runs on upgrade branches and validates the actual commit with the full application, artifact/container, and Cloudflare gates before promotion.
+
+Pin the Worker toolchain to compatible Wrangler 4.102.0 and Workers types 4.20260702.1 with a committed lockfile. Floating Wrangler resolved to 4.129.0 and required incompatible Workers types 5.x. Use the official Cloudflare 0.12.9 server in a Debian image with native Chromium, avoiding the upstream Ubuntu snap package path, and keep a writable non-root home. Add actual HTTP MCP browser actions, shared screenshot reads, and direct Puppeteer file reads to container CI. These checks do not substitute for a hosted R2 mount and live OpenAI production acceptance.
