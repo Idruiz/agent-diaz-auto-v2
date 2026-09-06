@@ -35,6 +35,7 @@ function forwardedRequest(request: Request, pathname: string): Request {
   url.pathname = pathname;
   const forwarded = new Request(url.toString(), request);
   forwarded.headers.delete("authorization");
+  forwarded.headers.set("host", "sandbox.internal");
   return forwarded;
 }
 
@@ -110,7 +111,7 @@ async function startPlaywright(
   sandbox: ReturnType<typeof getSandbox<Sandbox>>,
 ): Promise<void> {
   const process = await sandbox.startProcess(
-    `playwright-mcp --headless --isolated --no-sandbox --host 0.0.0.0 --port ${PLAYWRIGHT_PORT} --executable-path /usr/bin/chromium --output-dir ${PERSIST_PATH}/browser/playwright`,
+    `playwright-mcp --headless --isolated --no-sandbox --host 0.0.0.0 --allowed-hosts sandbox.internal,localhost,127.0.0.1 --port ${PLAYWRIGHT_PORT} --executable-path /usr/bin/chromium --output-dir ${PERSIST_PATH}/browser/playwright`,
     {
       cwd: "/workspace",
       processId: PLAYWRIGHT_PROCESS,

@@ -67,6 +67,7 @@ try {
   await new Promise(resolve => pageServer.listen(8940, "127.0.0.1", resolve));
   const playwright = start("playwright", "playwright-mcp", [
     "--headless", "--isolated", "--no-sandbox", "--host", "0.0.0.0", "--port", "8931",
+    "--allowed-hosts", "sandbox.internal,localhost,127.0.0.1",
     "--executable-path", "/usr/bin/chromium", "--output-dir", "/workspace/browser-proof",
   ]);
   const devtools = start("devtools", "mcp-proxy", [
