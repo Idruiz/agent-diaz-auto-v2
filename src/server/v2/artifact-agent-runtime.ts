@@ -512,6 +512,7 @@ export async function runV2ArtifactRuntime(
     }
 
     let internalDefinitions: import("./mcp-runtime.js").V2InternalMcpDefinition[] = [];
+    // Receipt path is the durable host path; the agent sees the /workspace mount.
     let persistentPath: string | null =
       sandboxRuntime.provider === "render" ? workRoot : null;
     if (sandboxRuntime.provider === "cloudflare") {

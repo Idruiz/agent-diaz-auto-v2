@@ -25,6 +25,8 @@ import { inspectV2RuntimeReadiness } from "../v2/runtime-readiness.js";
 import {
   assertV2SandboxProviderReady,
   resolveV2SandboxProvider,
+  V2_SANDBOX_PROVIDERS,
+  UNSAFE_UNIX_REFUSAL,
 } from "../v2/sandbox-runtime.js";
 import { ArtifactPipelineError } from "../artifact-quality.js";
 
@@ -210,7 +212,12 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
   it("fails closed instead of silently giving the production agent a host shell", () => {
     expect(() =>
       assertV2SandboxProviderReady("unix", { NODE_ENV: "production" }),
-    ).toThrow(/refuses generic Unix-local shell execution in production/);
+    ).toThrow(UNSAFE_UNIX_REFUSAL);
+    try {
+      assertV2SandboxProviderReady("unix", { NODE_ENV: "production" });
+    } catch (error) {
+      expect(error).toMatchObject({ code: "UNSAFE_UNIX_REFUSED" });
+    }
     expect(() =>
       assertV2SandboxProviderReady("unix", {
         NODE_ENV: "production",
@@ -219,16 +226,20 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
     ).not.toThrow();
   });
 
-  it("supports explicit Docker and Unix sandbox selection", () => {
-    expect(resolveV2SandboxProvider({ AGENT_SANDBOX_PROVIDER: "docker" })).toBe(
-      "docker",
-    );
-    expect(resolveV2SandboxProvider({ AGENT_SANDBOX_PROVIDER: "unix" })).toBe(
-      "unix",
-    );
+  it("supports every declared provider and rejects unknown providers by stable code", () => {
+    expect(V2_SANDBOX_PROVIDERS).toEqual(["cloudflare", "docker", "render", "unix"]);
+    for (const provider of V2_SANDBOX_PROVIDERS) {
+      expect(resolveV2SandboxProvider({ AGENT_SANDBOX_PROVIDER: ` ${provider.toUpperCase()} ` })).toBe(provider);
+    }
     expect(() =>
       resolveV2SandboxProvider({ AGENT_SANDBOX_PROVIDER: "spaceship" }),
-    ).toThrow(/cloudflare, docker, or unix/);
+    ).toThrow();
+    try {
+      resolveV2SandboxProvider({ AGENT_SANDBOX_PROVIDER: "spaceship" });
+    } catch (error) {
+      expect(error).toMatchObject({ code: "INVALID_SANDBOX_PROVIDER" });
+      for (const provider of V2_SANDBOX_PROVIDERS) expect((error as Error).message).toContain(provider);
+    }
   });
 
   it("reports deployment readiness without exposing secrets", () => {

@@ -12,7 +12,7 @@ import { apiRoutes } from "./routes.js";
 import { presentationExportRoutes } from "./presentation-exports.js";
 import { AgentRunner } from "./openai-agent.js";
 import { log } from "./log.js";
-import { inspectV2RuntimeReadiness } from "./v2/runtime-readiness.js";
+import { probeV2RuntimeReadiness } from "./v2/host-preflight.js";
 
 const config = loadConfig();
 ensureDirs(config.dataDir, config.artifactDir, config.uploadDir);
@@ -21,7 +21,7 @@ const auth = createAuth(config, db);
 const runner = new AgentRunner(config, db);
 const packageMeta = JSON.parse(fs.readFileSync(path.join(config.root, "package.json"), "utf8")) as { version: string; dependencies?: Record<string, string> };
 const exactDependencyVersion = (name: string) => String(packageMeta.dependencies?.[name] ?? "unknown").replace(/^[^0-9]*/, "");
-const agentRuntimeReadiness = inspectV2RuntimeReadiness(process.env);
+const agentRuntimeReadiness = await probeV2RuntimeReadiness(process.env);
 const app = express();
 app.disable("x-powered-by");
 app.use((req, res, next) => {

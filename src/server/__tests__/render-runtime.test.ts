@@ -28,10 +28,10 @@ describe("JEFE//AUTO Render execution plane", () => {
         STORAGE_DIR: "/var/data",
       }),
     ).not.toThrow();
-    expect(() =>
+    for (const invalid of ["/app/storage", "/var/database", "/var/data/../tmp"]) expect(() =>
       assertV2SandboxProviderReady("render", {
         NODE_ENV: "production",
-        STORAGE_DIR: "/app/storage",
+        STORAGE_DIR: invalid,
       }),
     ).toThrow(/persistent disk/);
   });

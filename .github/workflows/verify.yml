@@ -103,6 +103,17 @@ jobs:
           docker run --rm --entrypoint npx jefe-auto-verify:${{ github.sha }} --no-install @playwright/mcp --help
           docker run --rm --entrypoint npx jefe-auto-verify:${{ github.sha }} --no-install chrome-devtools-mcp --help
           docker run --rm --entrypoint node jefe-auto-verify:${{ github.sha }} --input-type=module -e 'import puppeteer from "puppeteer"; const browser = await puppeteer.launch({executablePath:"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]}); const page = await browser.newPage(); await page.setContent("<title>JEFE AUTO</title>"); if ((await page.title()) !== "JEFE AUTO") process.exit(1); await browser.close(); console.log("Puppeteer browser smoke passed");'
+      - name: Verify production readiness and failed HOME diagnostics
+        run: |
+          docker run --rm -i \
+            -v "$RUNNER_TEMP/jefe-render-disk:/var/data" \
+            --entrypoint node jefe-auto-verify:${{ github.sha }} \
+            --input-type=module < scripts/runtime-readiness-smoke.mjs
+          docker run --rm -i \
+            -e HOME=/app -e EXPECT_READY=false \
+            -v "$RUNNER_TEMP/jefe-render-disk:/var/data" \
+            --entrypoint node jefe-auto-verify:${{ github.sha }} \
+            --input-type=module < scripts/runtime-readiness-smoke.mjs
       - name: Preserve exact-prompt regression artifacts
         uses: actions/upload-artifact@v4
         with:

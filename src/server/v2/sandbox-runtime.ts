@@ -4,8 +4,18 @@ import {
   UnixLocalSandboxClient,
 } from "@openai/agents/sandbox/local";
 import { log } from "../log.js";
+import path from "node:path";
 
-export type V2SandboxProvider = "cloudflare" | "docker" | "render" | "unix";
+export const V2_SANDBOX_PROVIDERS = ["cloudflare", "docker", "render", "unix"] as const;
+export type V2SandboxProvider = (typeof V2_SANDBOX_PROVIDERS)[number];
+export const UNSAFE_UNIX_REFUSAL = "Agent Díaz V2 refuses generic Unix-local shell execution in production. Select AGENT_SANDBOX_PROVIDER=render for the reviewed Render execution plane, configure Cloudflare/Docker isolation, or explicitly set AGENT_SANDBOX_ALLOW_UNSAFE_UNIX=true for an emergency override.";
+
+export class SandboxConfigurationError extends Error {
+  constructor(readonly code: "INVALID_SANDBOX_PROVIDER" | "UNSAFE_UNIX_REFUSED", message: string) {
+    super(message);
+    this.name = "SandboxConfigurationError";
+  }
+}
 
 export type V2SandboxClient =
   | CloudflareSandboxClient
@@ -30,15 +40,11 @@ export function resolveV2SandboxProvider(
 ): V2SandboxProvider {
   const explicit = env.AGENT_SANDBOX_PROVIDER?.trim().toLocaleLowerCase();
   if (explicit) {
-    if (
-      explicit === "cloudflare" ||
-      explicit === "docker" ||
-      explicit === "render" ||
-      explicit === "unix"
-    )
-      return explicit;
-    throw new Error(
-      `AGENT_SANDBOX_PROVIDER must be cloudflare, docker, render, or unix; received '${env.AGENT_SANDBOX_PROVIDER}'`,
+    if (V2_SANDBOX_PROVIDERS.some((provider) => provider === explicit))
+      return explicit as V2SandboxProvider;
+    throw new SandboxConfigurationError(
+      "INVALID_SANDBOX_PROVIDER",
+      `AGENT_SANDBOX_PROVIDER must be ${V2_SANDBOX_PROVIDERS.slice(0, -1).join(", ")}, or ${V2_SANDBOX_PROVIDERS.at(-1)}; received '${env.AGENT_SANDBOX_PROVIDER}'`,
     );
   }
   if (env.CLOUDFLARE_SANDBOX_WORKER_URL?.trim()) return "cloudflare";
@@ -64,7 +70,8 @@ export function assertV2SandboxProviderReady(
     );
   if (provider === "render" && env.NODE_ENV === "production") {
     const storageDir = renderStorageDir(env);
-    if (!storageDir.startsWith("/var/data"))
+    const resolved = path.resolve(storageDir);
+    if (resolved !== "/var/data" && !resolved.startsWith("/var/data/"))
       throw new Error(
         `JEFE//AUTO Render execution requires STORAGE_DIR under /var/data so recovery state and artifacts use the persistent disk; received '${storageDir}'`,
       );
@@ -74,9 +81,7 @@ export function assertV2SandboxProviderReady(
     env.NODE_ENV === "production" &&
     !enabled(env.AGENT_SANDBOX_ALLOW_UNSAFE_UNIX)
   )
-    throw new Error(
-      "Agent Díaz V2 refuses generic Unix-local shell execution in production. Select AGENT_SANDBOX_PROVIDER=render for the reviewed Render execution plane, configure Cloudflare/Docker isolation, or explicitly set AGENT_SANDBOX_ALLOW_UNSAFE_UNIX=true for an emergency override.",
-    );
+    throw new SandboxConfigurationError("UNSAFE_UNIX_REFUSED", UNSAFE_UNIX_REFUSAL);
 }
 
 export function createV2SandboxRuntime(
