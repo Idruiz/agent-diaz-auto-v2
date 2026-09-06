@@ -11,7 +11,7 @@ function stdioCommand(
 }
 
 describe("Render shared Chromium MCP configuration", () => {
-  it("attaches both reviewed browser MCPs to one CDP endpoint", () => {
+  it("attaches both reviewed browser MCPs to one CDP endpoint without npx wrappers", () => {
     const definitions = parseV2McpDefinitions(undefined, {
       NODE_ENV: "production",
       AGENT_SANDBOX_PROVIDER: "render",
@@ -31,6 +31,12 @@ describe("Render shared Chromium MCP configuration", () => {
     expect(puppeteerCommand).toContain(
       "--browser-url='http://127.0.0.1:9222'",
     );
+    expect(playwrightCommand).toContain("node_modules/.bin/playwright-mcp");
+    expect(puppeteerCommand).toContain("node_modules/.bin/chrome-devtools-mcp");
+    expect(playwrightCommand).toContain("--max-old-space-size=96");
+    expect(puppeteerCommand).toContain("--max-old-space-size=96");
+    expect(playwrightCommand).not.toContain("npx ");
+    expect(puppeteerCommand).not.toContain("npx ");
     expect(playwrightCommand).not.toContain("--executable-path");
     expect(puppeteerCommand).not.toContain("--executablePath");
   });
@@ -49,7 +55,11 @@ describe("Render shared Chromium MCP configuration", () => {
       AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
     });
 
-    expect(stdioCommand(playwright[0])).toContain("--executable-path");
-    expect(stdioCommand(puppeteer[0])).toContain("--executablePath");
+    const playwrightCommand = stdioCommand(playwright[0]);
+    const puppeteerCommand = stdioCommand(puppeteer[0]);
+    expect(playwrightCommand).toContain("--executable-path");
+    expect(puppeteerCommand).toContain("--executablePath");
+    expect(playwrightCommand).toContain("--max-old-space-size=96");
+    expect(puppeteerCommand).toContain("--max-old-space-size=96");
   });
 });
