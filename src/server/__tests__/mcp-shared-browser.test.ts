@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { parseV2McpDefinitions } from "../v2/mcp-runtime.js";
 
+function stdioCommand(
+  definition: ReturnType<typeof parseV2McpDefinitions>[number] | undefined,
+): string {
+  expect(definition?.transport).toBe("stdio");
+  if (!definition || definition.transport !== "stdio")
+    throw new Error("Expected stdio MCP definition");
+  return definition.fullCommand;
+}
+
 describe("Render shared Chromium MCP configuration", () => {
   it("attaches both reviewed browser MCPs to one CDP endpoint", () => {
     const definitions = parseV2McpDefinitions(undefined, {
@@ -14,16 +23,16 @@ describe("Render shared Chromium MCP configuration", () => {
       "Playwright Browser",
       "Puppeteer DevTools",
     ]);
-    expect(definitions[0]?.transport).toBe("stdio");
-    expect(definitions[1]?.transport).toBe("stdio");
-    expect(definitions[0]?.fullCommand).toContain(
+    const playwrightCommand = stdioCommand(definitions[0]);
+    const puppeteerCommand = stdioCommand(definitions[1]);
+    expect(playwrightCommand).toContain(
       "--cdp-endpoint='http://127.0.0.1:9222'",
     );
-    expect(definitions[1]?.fullCommand).toContain(
+    expect(puppeteerCommand).toContain(
       "--browser-url='http://127.0.0.1:9222'",
     );
-    expect(definitions[0]?.fullCommand).not.toContain("--executable-path");
-    expect(definitions[1]?.fullCommand).not.toContain("--executablePath");
+    expect(playwrightCommand).not.toContain("--executable-path");
+    expect(puppeteerCommand).not.toContain("--executablePath");
   });
 
   it("keeps direct browser launch when only one MCP is enabled", () => {
@@ -40,7 +49,7 @@ describe("Render shared Chromium MCP configuration", () => {
       AGENT_BROWSER_EXECUTABLE_PATH: "/usr/bin/chromium",
     });
 
-    expect(playwright[0]?.fullCommand).toContain("--executable-path");
-    expect(puppeteer[0]?.fullCommand).toContain("--executablePath");
+    expect(stdioCommand(playwright[0])).toContain("--executable-path");
+    expect(stdioCommand(puppeteer[0])).toContain("--executablePath");
   });
 });
