@@ -51,7 +51,9 @@ export function installArtifactExecutionGate(
   db: GateDb,
   options: ArtifactExecutionGateOptions = {},
 ): void {
-  const pollMs = Math.max(100, options.pollMs ?? 500);
+  // Keep the production default deliberately conservative, while honoring
+  // explicit lower intervals used by deterministic tests and callers.
+  const pollMs = Math.max(1, options.pollMs ?? 500);
   const cleanupGraceMs = Math.max(0, options.cleanupGraceMs ?? 3_000);
   const originalStart = runner.start.bind(runner);
   const queued: string[] = [];
