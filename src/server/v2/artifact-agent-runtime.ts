@@ -53,6 +53,15 @@ export interface V2ArtifactAttachment {
   size: number;
 }
 
+export interface V2AgentProgress {
+  progress: number;
+  stage: "agent";
+  message: string;
+  elapsedMs?: number;
+  idleMs?: number;
+  tool?: string;
+}
+
 export interface V2ArtifactRuntimeInput {
   config: Config;
   jobId: string;
@@ -63,7 +72,7 @@ export interface V2ArtifactRuntimeInput {
   attachments?: V2ArtifactAttachment[];
   priorContext?: string;
   signal?: AbortSignal;
-  onProgress?: (event: ArtifactBuildProgress) => void;
+  onProgress?: (event: ArtifactBuildProgress | V2AgentProgress) => void;
 }
 
 export interface V2ArtifactRuntimeResult {
@@ -115,6 +124,20 @@ function safeWorkspaceName(name: string, index: number): string {
     .replace(/^\.+/, "")
     .slice(0, 120);
   return cleaned || `upload_${index + 1}`;
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function streamToolName(event: any): string | null {
+  const rawName = event?.item?.rawItem?.name;
+  if (typeof rawName !== "string" || !rawName.trim()) return null;
+  return rawName.replaceAll("__", " → ");
 }
 
 export function classifyV2BuildFailure(error: unknown): ClassifiedFailure {
@@ -205,6 +228,75 @@ export async function runV2ArtifactRuntime(
   let acceptedBuildId: string | null = null;
   const successfulBuilds = new Map<string, BuiltFile>();
   const failureFingerprints = new Map<string, number>();
+  const startedAt = Date.now();
+  let lastProgress = 20;
+  let lastActivity = "Preparing agent workspace";
+  let lastActivityAt = startedAt;
+  let lastTool: string | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+  const emitAgentProgress = (
+    progress: number,
+    message: string,
+    extra: Partial<Omit<V2AgentProgress, "progress" | "stage" | "message">> = {},
+  ) => {
+    lastProgress = Math.max(lastProgress, Math.min(99, progress));
+    lastActivity = message;
+    lastActivityAt = Date.now();
+    const event: V2AgentProgress = {
+      progress: lastProgress,
+      stage: "agent",
+      message,
+      elapsedMs: Date.now() - startedAt,
+      ...extra,
+    };
+    input.onProgress?.(event);
+    log("info", "agent_v2.telemetry", {
+      jobId: input.jobId,
+      kind: input.kind,
+      ...event,
+    });
+  };
+
+  const emitBuildProgress = (event: ArtifactBuildProgress) => {
+    lastProgress = Math.max(lastProgress, Math.min(99, event.progress));
+    lastActivity = event.message;
+    lastActivityAt = Date.now();
+    input.onProgress?.({ ...event, progress: lastProgress });
+  };
+
+  const startHeartbeat = () => {
+    if (heartbeat) return;
+    heartbeat = setInterval(() => {
+      const now = Date.now();
+      const idleMs = now - lastActivityAt;
+      const message = `Agent active · ${formatElapsed(now - startedAt)} elapsed · ${lastActivity}${idleMs >= 5_000 ? ` · ${formatElapsed(idleMs)} since last event` : ""}`;
+      input.onProgress?.({
+        progress: lastProgress,
+        stage: "agent",
+        message,
+        elapsedMs: now - startedAt,
+        idleMs,
+        ...(lastTool ? { tool: lastTool } : {}),
+      });
+      log("info", "agent_v2.heartbeat", {
+        jobId: input.jobId,
+        kind: input.kind,
+        elapsedMs: now - startedAt,
+        idleMs,
+        progress: lastProgress,
+        lastActivity,
+        lastTool,
+      });
+    }, 5_000);
+    heartbeat.unref?.();
+  };
+
+  const stopHeartbeat = () => {
+    if (!heartbeat) return;
+    clearInterval(heartbeat);
+    heartbeat = null;
+  };
 
   const buildTool = tool({
     name: "build_and_validate_artifact",
@@ -216,6 +308,7 @@ export async function runV2ArtifactRuntime(
     async execute({ plan }: { plan: ArtifactPlan }) {
       if (input.signal?.aborted) throw new Error("Agent Díaz V2 run cancelled");
       attempt += 1;
+      emitAgentProgress(50, `Build attempt ${attempt} started · rendering and validating`);
       const { attemptDir, planSha } = writeV2AttemptPlan(
         workRoot,
         attempt,
@@ -237,7 +330,7 @@ export async function runV2ArtifactRuntime(
           (event) => {
             if (input.signal?.aborted)
               throw new Error("Agent Díaz V2 run cancelled");
-            input.onProgress?.(event);
+            emitBuildProgress(event);
           },
         );
         const buildId = crypto.randomUUID();
@@ -248,6 +341,7 @@ export async function runV2ArtifactRuntime(
           status: "validated",
           buildId,
         });
+        emitAgentProgress(94, `Build attempt ${attempt} passed validation · awaiting explicit acceptance`);
         log("info", "agent_v2.artifact_build_validated", {
           jobId: input.jobId,
           kind: input.kind,
@@ -289,6 +383,10 @@ export async function runV2ArtifactRuntime(
           message: failure.message,
           stagnationCount,
         });
+        emitAgentProgress(
+          Math.max(lastProgress, 55),
+          `Build attempt ${attempt} rejected · ${failure.failureClass} · agent is revising`,
+        );
         log("warn", "agent_v2.artifact_build_rejected", {
           jobId: input.jobId,
           kind: input.kind,
@@ -328,6 +426,7 @@ export async function runV2ArtifactRuntime(
           "That buildId is not a validated build from this run. Build and validate a candidate first.",
         );
       acceptedBuildId = buildId;
+      emitAgentProgress(98, `Validated artifact accepted · finalizing ${built.name}`);
       log("info", "agent_v2.artifact_accepted", {
         jobId: input.jobId,
         kind: input.kind,
@@ -379,6 +478,7 @@ export async function runV2ArtifactRuntime(
     entries: manifestEntries,
   });
 
+  emitAgentProgress(21, "Selecting execution plane and preparing sandbox");
   let sandboxRuntime: ReturnType<typeof createV2SandboxRuntime>;
   try {
     sandboxRuntime = createV2SandboxRuntime(input.jobId);
@@ -394,7 +494,9 @@ export async function runV2ArtifactRuntime(
   let mcpRuntime: ReturnType<typeof createV2McpRuntime> | null = null;
   try {
     try {
+      emitAgentProgress(23, `Creating ${sandboxRuntime.provider} workspace`);
       sandboxSession = await sandboxRuntime.client.create({ manifest });
+      emitAgentProgress(25, `${sandboxRuntime.provider} workspace ready`);
     } catch (error) {
       throw new ArtifactPipelineError(
         "INFRA",
@@ -404,9 +506,11 @@ export async function runV2ArtifactRuntime(
     }
 
     let internalDefinitions: import("./mcp-runtime.js").V2InternalMcpDefinition[] = [];
-    let persistentPath: string | null = null;
+    let persistentPath: string | null =
+      sandboxRuntime.provider === "render" ? workRoot : null;
     if (sandboxRuntime.provider === "cloudflare") {
       try {
+        emitAgentProgress(27, "Preparing Cloudflare persistent workspace and browser bridge");
         const sandboxId = cloudflareSandboxIdFromSession(sandboxSession);
         const prepared = await prepareCloudflareWorkspace({
           jobId: input.jobId,
@@ -428,6 +532,7 @@ export async function runV2ArtifactRuntime(
     }
 
     try {
+      emitAgentProgress(29, "Loading reviewed MCP capability definitions");
       mcpRuntime = createV2McpRuntime(input.config, process.env, {
         internalDefinitions,
       });
@@ -453,7 +558,10 @@ export async function runV2ArtifactRuntime(
       ],
       mcpServers,
       mcpConfig: {
-        convertSchemasToStrict: true,
+        // Browser MCP schemas contain constructs the strict converter cannot
+        // normalize. The SDK falls back to the original schemas anyway, but
+        // asking it to convert them floods production logs with false errors.
+        convertSchemasToStrict: false,
         errorFunction: null,
         includeServerInToolNames: true,
       },
@@ -461,12 +569,26 @@ export async function runV2ArtifactRuntime(
         reasoning: { effort: input.reasoningEffort },
         toolChoice: "required",
       },
-      resetToolChoice: false,
+      // Force a tool on the first turn, then let the runner reset to auto so a
+      // successful agent is not trapped in a required-tool loop forever.
+      resetToolChoice: true,
       toolUseBehavior: { stopAtToolNames: ["accept_validated_artifact"] },
     });
 
     try {
+      emitAgentProgress(
+        31,
+        mcpRuntime.descriptions.length
+          ? `Connecting ${mcpRuntime.descriptions.map((item) => item.name).join(" + ")}`
+          : "No MCP servers configured · continuing with sandbox tools",
+      );
       await connectV2McpServers(mcpRuntime, input.jobId);
+      emitAgentProgress(
+        33,
+        mcpRuntime.descriptions.length
+          ? `MCP connected · ${mcpRuntime.descriptions.map((item) => item.name).join(" + ")}`
+          : "Sandbox tools ready",
+      );
     } catch (error) {
       throw new ArtifactPipelineError(
         "INFRA",
@@ -488,15 +610,64 @@ export async function runV2ArtifactRuntime(
 
     let result: any;
     try {
-      result = await run(
+      emitAgentProgress(35, "Agent reasoning started · researching and planning before first build");
+      startHeartbeat();
+      const stream = await run(
         agent,
         `Open REQUEST.md and complete the ${input.kind} request. Use the workspace, research/code tools as needed, and iterate build_and_validate_artifact until it passes. Finish only by calling accept_validated_artifact.`,
         {
-          maxTurns: null,
+          maxTurns: 256,
+          stream: true,
           signal: input.signal,
           sandbox: { session: sandboxSession },
         },
       );
+
+      for await (const event of stream.toStream()) {
+        if (event.type === "agent_updated_stream_event") {
+          emitAgentProgress(36, `Agent active · ${event.agent.name}`);
+          continue;
+        }
+        if (event.type !== "run_item_stream_event") continue;
+
+        if (event.item.type === "tool_call_item") {
+          lastTool = streamToolName(event) ?? "tool";
+          emitAgentProgress(
+            38,
+            `Using ${lastTool}`,
+            { tool: lastTool },
+          );
+          log("info", "agent_v2.tool_call_started", {
+            jobId: input.jobId,
+            kind: input.kind,
+            tool: lastTool,
+            elapsedMs: Date.now() - startedAt,
+          });
+          continue;
+        }
+
+        if (event.item.type === "tool_call_output_item") {
+          const completedTool = lastTool ?? "tool";
+          emitAgentProgress(
+            40,
+            `${completedTool} returned · agent continuing`,
+            { tool: completedTool },
+          );
+          log("info", "agent_v2.tool_call_completed", {
+            jobId: input.jobId,
+            kind: input.kind,
+            tool: completedTool,
+            elapsedMs: Date.now() - startedAt,
+          });
+          continue;
+        }
+
+        if (event.item.type === "message_output_item") {
+          emitAgentProgress(42, "Agent completed a reasoning/output step · continuing toward validated artifact");
+        }
+      }
+      await stream.completed;
+      result = stream;
     } catch (error: any) {
       if (input.signal?.aborted || error?.name === "AbortError") throw error;
       if (error instanceof ArtifactPipelineError) throw error;
@@ -506,6 +677,8 @@ export async function runV2ArtifactRuntime(
         `Agent Díaz V2 runtime failure: ${failure.message}`,
         { ruleOrPart: failure.ruleOrPart, cause: error },
       );
+    } finally {
+      stopHeartbeat();
     }
 
     if (!acceptedBuildId)
@@ -535,8 +708,10 @@ export async function runV2ArtifactRuntime(
       acceptance: "explicit-validated-build",
       recovery: "revision-ledger",
       diagnostics: "model-readable-file-output",
+      telemetry: "streamed-tool-events-plus-heartbeat",
     };
 
+    emitAgentProgress(99, `Agent run complete · ${attempt} build attempt${attempt === 1 ? "" : "s"} · packaging download`);
     log("info", "agent_v2.run_completed", {
       jobId: input.jobId,
       kind: input.kind,
@@ -550,6 +725,7 @@ export async function runV2ArtifactRuntime(
       finalOutput: result.finalOutput,
     };
   } finally {
+    stopHeartbeat();
     if (mcpRuntime) await closeV2McpServers(mcpRuntime, input.jobId);
     try {
       await sandboxSession?.close?.();
