@@ -22,6 +22,7 @@ const StdioMcpSchema = z.object({
   transport: z.literal("stdio"),
   name: z.string().min(1).max(80),
   fullCommand: z.string().min(1).max(2_000),
+  timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
   allowedTools: ToolNameListSchema,
   blockedTools: ToolNameListSchema,
 });
@@ -43,6 +44,7 @@ const BUILTIN_BROWSER_MCP_NAMES = new Set([
   "Playwright Browser",
   "Puppeteer DevTools",
 ]);
+const DEFAULT_STDIO_TOOL_TIMEOUT_MS = 90_000;
 
 export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
 
@@ -88,12 +90,14 @@ function builtInHostBrowserDefinitions(
       transport: "stdio",
       name: "Playwright Browser",
       fullCommand: `npx --no-install @playwright/mcp --headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
+      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
   if (rawMode === "both" || rawMode === "puppeteer")
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
       fullCommand: `npx --no-install chrome-devtools-mcp --headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
+      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
   return definitions;
 }
@@ -258,6 +262,8 @@ export function createV2McpRuntime(
         fullCommand: definition.fullCommand,
         cacheToolsList: true,
         useStructuredContent: true,
+        timeout: definition.timeoutMs ?? DEFAULT_STDIO_TOOL_TIMEOUT_MS,
+        clientSessionTimeoutSeconds: 10,
         ...(toolFilter ? { toolFilter } : {}),
       }),
     );
@@ -274,8 +280,18 @@ export async function connectV2McpServers(
   const connected: V2McpServer[] = [];
   try {
     for (const server of runtime.servers) {
+      const startedAt = Date.now();
+      log("info", "agent_v2.mcp_server_connecting", {
+        jobId,
+        server: server.name,
+      });
       await server.connect();
       connected.push(server);
+      log("info", "agent_v2.mcp_server_connected", {
+        jobId,
+        server: server.name,
+        elapsedMs: Date.now() - startedAt,
+      });
     }
   } catch (error) {
     for (const server of connected.reverse()) {
