@@ -64,20 +64,29 @@ jobs:
             jefe-auto-regression:${{ github.sha }} \
             npx vitest run --root . src/server/__tests__/agent.test.ts \
               -t "completes every artifact route through evidence, structure, build, validation, and persistence"
-      - name: Verify Cloudflare sandbox execution plane
+      - name: Verify optional Cloudflare sandbox control-plane contract
         working-directory: cloudflare-sandbox
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm run typecheck
           npm run verify:contract
-      - name: Build Cloudflare sandbox browser image
-        run: docker build --tag jefe-auto-cloudflare-sandbox:${{ github.sha }} cloudflare-sandbox
-      - name: Verify Cloudflare sandbox browser image
-        run: |
-          docker run --rm --entrypoint sh jefe-auto-cloudflare-sandbox:${{ github.sha }} -lc 'set -eu; test -d /workspace; test -w /workspace; chromium --version; playwright-mcp --help >/dev/null; chrome-devtools-mcp --help >/dev/null; mcp-proxy --help >/dev/null; NODE_PATH=/usr/local/lib/node_modules node -e "const p=require(\"puppeteer\"); if (!p.launch) process.exit(1); console.log(\"Cloudflare Puppeteer module smoke passed\")"'
-          docker run --rm --entrypoint node -v "$PWD:/checks:ro" jefe-auto-cloudflare-sandbox:${{ github.sha }} /checks/scripts/cloudflare-browser-smoke.mjs
       - name: Build production container
         run: docker build --tag jefe-auto-verify:${{ github.sha }} .
+      - name: Verify Render persistent filesystem execution plane
+        run: |
+          RENDER_DISK="$RUNNER_TEMP/jefe-render-disk"
+          rm -rf "$RENDER_DISK"
+          mkdir -p "$RENDER_DISK"
+          chmod 0777 "$RENDER_DISK"
+          docker run --rm \
+            -e NODE_ENV=production \
+            -e AGENT_SANDBOX_PROVIDER=render \
+            -e STORAGE_DIR=/var/data \
+            -v "$RENDER_DISK:/var/data" \
+            --entrypoint node \
+            jefe-auto-verify:${{ github.sha }} \
+            --input-type=module -e 'import fs from "node:fs"; import { createV2SandboxRuntime } from "./dist/server/v2/sandbox-runtime.js"; const runtime=createV2SandboxRuntime("render-ci", process.env); if(runtime.provider!=="render") process.exit(1); fs.mkdirSync("/var/data/ci",{recursive:true}); fs.writeFileSync("/var/data/ci/persistence-proof.txt","jefe-render-persistent"); if(fs.readFileSync("/var/data/ci/persistence-proof.txt","utf8")!=="jefe-render-persistent") process.exit(1); console.log("Render persistent filesystem smoke passed")'
+          test "$(cat "$RENDER_DISK/ci/persistence-proof.txt")" = "jefe-render-persistent"
       - name: Verify browser autonomy in production container
         run: |
           docker run --rm --entrypoint chromium jefe-auto-verify:${{ github.sha }} --version

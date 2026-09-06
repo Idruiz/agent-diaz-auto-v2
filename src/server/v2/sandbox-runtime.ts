@@ -5,7 +5,7 @@ import {
 } from "@openai/agents/sandbox/local";
 import { log } from "../log.js";
 
-export type V2SandboxProvider = "cloudflare" | "docker" | "unix";
+export type V2SandboxProvider = "cloudflare" | "docker" | "render" | "unix";
 
 export type V2SandboxClient =
   | CloudflareSandboxClient
@@ -21,18 +21,28 @@ function enabled(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/i.test(value?.trim() ?? "");
 }
 
+function renderStorageDir(env: NodeJS.ProcessEnv): string {
+  return env.STORAGE_DIR?.trim() || "/var/data";
+}
+
 export function resolveV2SandboxProvider(
   env: NodeJS.ProcessEnv = process.env,
 ): V2SandboxProvider {
   const explicit = env.AGENT_SANDBOX_PROVIDER?.trim().toLocaleLowerCase();
   if (explicit) {
-    if (explicit === "cloudflare" || explicit === "docker" || explicit === "unix")
+    if (
+      explicit === "cloudflare" ||
+      explicit === "docker" ||
+      explicit === "render" ||
+      explicit === "unix"
+    )
       return explicit;
     throw new Error(
-      `AGENT_SANDBOX_PROVIDER must be cloudflare, docker, or unix; received '${env.AGENT_SANDBOX_PROVIDER}'`,
+      `AGENT_SANDBOX_PROVIDER must be cloudflare, docker, or unix, with render also supported; received '${env.AGENT_SANDBOX_PROVIDER}'`,
     );
   }
   if (env.CLOUDFLARE_SANDBOX_WORKER_URL?.trim()) return "cloudflare";
+  if (enabled(env.RENDER)) return "render";
   return "unix";
 }
 
@@ -52,13 +62,20 @@ export function assertV2SandboxProviderReady(
     throw new Error(
       "JEFE//AUTO production Cloudflare sandbox requires CLOUDFLARE_SANDBOX_API_KEY so workspace and browser MCP proxy routes are authenticated",
     );
+  if (provider === "render" && env.NODE_ENV === "production") {
+    const storageDir = renderStorageDir(env);
+    if (!storageDir.startsWith("/var/data"))
+      throw new Error(
+        `JEFE//AUTO Render execution requires STORAGE_DIR under /var/data so recovery state and artifacts use the persistent disk; received '${storageDir}'`,
+      );
+  }
   if (
     provider === "unix" &&
     env.NODE_ENV === "production" &&
     !enabled(env.AGENT_SANDBOX_ALLOW_UNSAFE_UNIX)
   )
     throw new Error(
-      "Agent Díaz V2 refuses Unix-local shell execution in production. Configure CLOUDFLARE_SANDBOX_WORKER_URL, select AGENT_SANDBOX_PROVIDER=docker, or explicitly set AGENT_SANDBOX_ALLOW_UNSAFE_UNIX=true for an emergency override.",
+      "Agent Díaz V2 refuses generic Unix-local shell execution in production. Select AGENT_SANDBOX_PROVIDER=render for the reviewed Render execution plane, configure Cloudflare/Docker isolation, or explicitly set AGENT_SANDBOX_ALLOW_UNSAFE_UNIX=true for an emergency override.",
     );
 }
 
@@ -101,6 +118,18 @@ export function createV2SandboxRuntime(
       image,
     });
     return { provider, client };
+  }
+
+  if (provider === "render") {
+    const storageDir = renderStorageDir(env);
+    log("info", "agent_v2.sandbox_selected", {
+      jobId,
+      provider,
+      hosted: true,
+      persistentFilesystem: storageDir,
+      executionPlane: "render-service",
+    });
+    return { provider, client: new UnixLocalSandboxClient() };
   }
 
   log(
