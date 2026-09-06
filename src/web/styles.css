@@ -612,3 +612,99 @@ body { background: var(--jefe-bg); color: var(--jefe-ink); }
 .artifactStatus b, .artifactCard a, .approval b { color: var(--jefe-accent); }
 .artifactStatus code, .artifactCard code { background: #eef2f8; color: #2d3550; }
 .error { color: var(--jefe-danger); }
+
+/* JEFE//AUTO — live activity pass */
+.login h1 { font-size: clamp(1.7rem, 3.2vw, 2.75rem); line-height: 1.05; }
+.workspace h1 { font-size: 1.05rem; letter-spacing: .02em; }
+.emptyState h2 { font-size: 1.45rem; }
+.brand strong { font-size: .92rem; }
+
+.statusCard {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  color: var(--jefe-ink);
+  border-color: var(--jefe-line);
+  box-shadow: 0 14px 34px rgba(39,53,94,.08);
+}
+.statusCard p {
+  margin: .8rem 0 .35rem;
+  font-size: .95rem;
+  line-height: 1.55;
+  color: #273149;
+  overflow-wrap: anywhere;
+}
+.statusCard small { color: var(--jefe-muted); }
+.statusTop strong::after {
+  content: " activity";
+  margin-left: .22rem;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--jefe-muted);
+}
+.pill.running::before,
+.pill.building::before,
+.pill.queued::before,
+.pill.blocked::before,
+.pill.waiting_approval::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: .42rem;
+  border-radius: 50%;
+  background: var(--jefe-accent);
+  box-shadow: 0 0 0 0 rgba(49,86,211,.3);
+  animation: jefe-live-pulse 1.5s infinite;
+}
+@keyframes jefe-live-pulse {
+  70% { box-shadow: 0 0 0 7px rgba(49,86,211,0); }
+}
+.statusCard:has(.pill.running) .bar i,
+.statusCard:has(.pill.building) .bar i,
+.statusCard:has(.pill.queued) .bar i {
+  background: linear-gradient(90deg, var(--jefe-accent), var(--jefe-accent-2), var(--jefe-accent));
+  background-size: 220% 100%;
+  animation: jefe-progress-flow 2.2s linear infinite;
+}
+@keyframes jefe-progress-flow {
+  to { background-position: -220% 0; }
+}
+
+.taskPicker button:first-child::after {
+  content: "NO TOOLS";
+  display: inline-block;
+  margin-left: .42rem;
+  padding: .1rem .34rem;
+  border: 1px solid #c7cfdd;
+  border-radius: 99px;
+  background: #f3f5f9;
+  color: #6f788a;
+  font-size: .52rem;
+  font-weight: 850;
+  letter-spacing: .06em;
+  vertical-align: 1px;
+}
+.taskPicker button:first-child.active::after {
+  border-color: #a9b7e8;
+  background: #eef1ff;
+  color: #455fb8;
+}
+.artifactLogToggle {
+  border: 1px solid #b9c5e9;
+  background: #eef2ff;
+  color: #2948af;
+  box-shadow: none;
+}
+.artifactLogPanel {
+  background: #10192a;
+  border-color: #394967;
+}
+
+@media (max-width: 720px) {
+  .login h1 { font-size: 1.65rem; }
+  .workspace h1 { font-size: .95rem; }
+  .statusCard p { font-size: .9rem; }
+}
