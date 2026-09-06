@@ -210,7 +210,7 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
   it("fails closed instead of silently giving the production agent a host shell", () => {
     expect(() =>
       assertV2SandboxProviderReady("unix", { NODE_ENV: "production" }),
-    ).toThrow(/refuses Unix-local shell execution in production/);
+    ).toThrow(/refuses generic Unix-local shell execution in production/);
     expect(() =>
       assertV2SandboxProviderReady("unix", {
         NODE_ENV: "production",
