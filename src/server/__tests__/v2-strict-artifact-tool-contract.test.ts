@@ -2,14 +2,20 @@ import { tool } from "@openai/agents";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ArtifactPlanSchema } from "../../shared/contracts";
+import {
+  V2ArtifactPlanToolInputSchema,
+  normalizeV2ArtifactPlanToolInput,
+} from "../v2/artifact-tool-contract";
 
 describe("Agent Díaz V2 strict artifact tool contract", () => {
-  it("accepts the null representation emitted by the SDK strict schema", () => {
+  it("accepts the null representation emitted by the SDK strict schema and normalizes it canonically", () => {
     const buildTool = tool({
       name: "build_and_validate_artifact_contract_probe",
       description: "Contract probe only",
-      parameters: z.object({ plan: ArtifactPlanSchema }),
-      execute: async ({ plan }) => ({ title: plan.title }),
+      parameters: z.object({ plan: V2ArtifactPlanToolInputSchema }),
+      execute: async ({ plan }) => ({
+        title: normalizeV2ArtifactPlanToolInput(plan).title,
+      }),
     });
 
     expect(buildTool.strict).toBe(true);
@@ -72,11 +78,12 @@ describe("Agent Díaz V2 strict artifact tool contract", () => {
       sources: null,
     };
 
-    const parsed = ArtifactPlanSchema.safeParse(strictPayload);
-    expect(parsed.success).toBe(true);
-    if (!parsed.success) return;
+    const toolParsed = V2ArtifactPlanToolInputSchema.safeParse(strictPayload);
+    expect(toolParsed.success).toBe(true);
+    if (!toolParsed.success) return;
 
-    expect(parsed.data).toMatchObject({
+    const parsed = normalizeV2ArtifactPlanToolInput(toolParsed.data);
+    expect(parsed).toMatchObject({
       subtitle: "",
       requirements: [{ mandatory: true }],
       sections: [
@@ -89,12 +96,12 @@ describe("Agent Díaz V2 strict artifact tool contract", () => {
       ],
       sources: [],
     });
-    expect(parsed.data.pages).toBeUndefined();
-    expect(parsed.data.sections[0]?.activity).toBeUndefined();
-    expect(parsed.data.sections[0]?.table).toBeUndefined();
-    expect(parsed.data.sections[0]?.chart).toBeUndefined();
-    expect(parsed.data.sections[0]?.diagram).toBeUndefined();
-    expect(parsed.data.sections[0]?.imageQuery).toBeUndefined();
+    expect(parsed.pages).toBeUndefined();
+    expect(parsed.sections[0]?.activity).toBeUndefined();
+    expect(parsed.sections[0]?.table).toBeUndefined();
+    expect(parsed.sections[0]?.chart).toBeUndefined();
+    expect(parsed.sections[0]?.diagram).toBeUndefined();
+    expect(parsed.sections[0]?.imageQuery).toBeUndefined();
   });
 
   it("allows a two-page website plan instead of imposing a three-page floor", () => {
