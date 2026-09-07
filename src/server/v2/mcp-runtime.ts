@@ -52,23 +52,26 @@ const DEFAULT_STDIO_TOOL_TIMEOUT_MS = 90_000;
 const SHARED_BROWSER_ENDPOINT = "http://127.0.0.1:9222";
 const SHARED_BROWSER_START_TIMEOUT_MS = 15_000;
 const BROWSER_MCP_NODE_HEAP_MB = 96;
+const BROWSER_MCP_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+] as const;
 
 export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\"'\\"'`)}'`;
+export interface BuiltInBrowserMcpProcessSpec {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function localMcpCommand(binary: string, args: string): string {
-  const executable = path.resolve(process.cwd(), "node_modules", ".bin", binary);
-  // MCPServerStdio parses fullCommand into an executable + argv; a leading
-  // VAR=value token is therefore treated as the executable and fails ENOENT.
-  // Use /usr/bin/env so NODE_OPTIONS is applied without requiring a shell.
-  return `/usr/bin/env NODE_OPTIONS=${shellQuote(`--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`)} ${shellQuote(executable)} ${args}`;
 }
 
 export function browserAutonomyMode(
@@ -91,6 +94,73 @@ function cloudflareExecutionPlane(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.CLOUDFLARE_SANDBOX_WORKER_URL?.trim());
 }
 
+function browserMcpEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of BROWSER_MCP_ENV_KEYS) {
+    const value = env[key] ?? process.env[key];
+    if (value) result[key] = value;
+  }
+  result.NODE_OPTIONS = `--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`;
+  return result;
+}
+
+export function builtInBrowserMcpProcessSpec(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): BuiltInBrowserMcpProcessSpec | null {
+  if (!BUILTIN_BROWSER_MCP_NAMES.has(name) || cloudflareExecutionPlane(env))
+    return null;
+
+  const mode = browserAutonomyMode(env);
+  if (mode === "off") return null;
+  if (name === "Playwright Browser" && mode === "puppeteer") return null;
+  if (name === "Puppeteer DevTools" && mode === "playwright") return null;
+
+  const executable =
+    env.AGENT_BROWSER_EXECUTABLE_PATH?.trim() || "/usr/bin/chromium";
+  const envVars = browserMcpEnvironment(env);
+
+  if (name === "Playwright Browser") {
+    const command = path.resolve(
+      process.cwd(),
+      "node_modules",
+      ".bin",
+      "playwright-mcp",
+    );
+    const args =
+      mode === "both"
+        ? [`--cdp-endpoint=${SHARED_BROWSER_ENDPOINT}`]
+        : [
+            "--headless",
+            "--isolated",
+            "--no-sandbox",
+            "--executable-path",
+            executable,
+          ];
+    return { command, args, env: envVars };
+  }
+
+  const command = path.resolve(
+    process.cwd(),
+    "node_modules",
+    ".bin",
+    "chrome-devtools-mcp",
+  );
+  const args =
+    mode === "both"
+      ? [`--browser-url=${SHARED_BROWSER_ENDPOINT}`, "--no-usage-statistics"]
+      : [
+          "--headless",
+          "--isolated",
+          "--executablePath",
+          executable,
+          "--chromeArg=--no-sandbox",
+          "--chromeArg=--disable-dev-shm-usage",
+          "--no-usage-statistics",
+        ];
+  return { command, args, env: envVars };
+}
+
 function builtInHostBrowserDefinitions(
   env: NodeJS.ProcessEnv = process.env,
 ): V2McpDefinitions {
@@ -101,58 +171,26 @@ function builtInHostBrowserDefinitions(
 
   const rawMode = browserAutonomyMode(env);
   if (rawMode === "off") return [];
-  const executable =
-    env.AGENT_BROWSER_EXECUTABLE_PATH?.trim() || "/usr/bin/chromium";
-  const definitions: V2McpDefinitions = [];
 
-  // On constrained Render instances, launching one Chromium per browser MCP
-  // is enough to exceed the 512 MB service limit. In "both" mode JEFE starts
-  // one host Chromium and both reviewed MCPs attach to that same CDP endpoint.
-  // Invoke the locally installed binaries directly so npx/npm wrapper Node
-  // processes do not remain resident beside both MCP servers.
-  if (rawMode === "both") {
-    definitions.push({
-      transport: "stdio",
-      name: "Playwright Browser",
-      fullCommand: localMcpCommand(
-        "playwright-mcp",
-        `--cdp-endpoint=${shellQuote(SHARED_BROWSER_ENDPOINT)}`,
-      ),
-      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
-    });
-    definitions.push({
-      transport: "stdio",
-      name: "Puppeteer DevTools",
-      fullCommand: localMcpCommand(
-        "chrome-devtools-mcp",
-        `--browser-url=${shellQuote(SHARED_BROWSER_ENDPOINT)} --no-usage-statistics`,
-      ),
-      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
-    });
-    return definitions;
-  }
+  const names: string[] = [];
+  if (rawMode === "both" || rawMode === "playwright")
+    names.push("Playwright Browser");
+  if (rawMode === "both" || rawMode === "puppeteer")
+    names.push("Puppeteer DevTools");
 
-  if (rawMode === "playwright")
-    definitions.push({
-      transport: "stdio",
-      name: "Playwright Browser",
-      fullCommand: localMcpCommand(
-        "playwright-mcp",
-        `--headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
-      ),
+  return names.map((name) => {
+    const spec = builtInBrowserMcpProcessSpec(name, env);
+    if (!spec)
+      throw new Error(`Unable to prepare built-in MCP process '${name}'`);
+    return {
+      transport: "stdio" as const,
+      name,
+      // Kept for diagnostics/backward-compatible definition inspection only.
+      // createV2McpRuntime uses command + args + env for built-in browser MCPs.
+      fullCommand: [spec.command, ...spec.args].join(" "),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
-    });
-  if (rawMode === "puppeteer")
-    definitions.push({
-      transport: "stdio",
-      name: "Puppeteer DevTools",
-      fullCommand: localMcpCommand(
-        "chrome-devtools-mcp",
-        `--headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
-      ),
-      timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
-    });
-  return definitions;
+    };
+  });
 }
 
 interface SharedBrowserRuntime {
@@ -331,17 +369,34 @@ export function createV2McpRuntime(
       continue;
     }
 
-    servers.push(
-      new MCPServerStdio({
-        name: definition.name,
-        fullCommand: definition.fullCommand,
-        cacheToolsList: true,
-        useStructuredContent: true,
-        timeout: definition.timeoutMs ?? DEFAULT_STDIO_TOOL_TIMEOUT_MS,
-        clientSessionTimeoutSeconds: 10,
-        ...(toolFilter ? { toolFilter } : {}),
-      }),
-    );
+    const builtInSpec = builtInBrowserMcpProcessSpec(definition.name, env);
+    if (builtInSpec) {
+      servers.push(
+        new MCPServerStdio({
+          name: definition.name,
+          command: builtInSpec.command,
+          args: builtInSpec.args,
+          env: builtInSpec.env,
+          cacheToolsList: true,
+          useStructuredContent: true,
+          timeout: definition.timeoutMs ?? DEFAULT_STDIO_TOOL_TIMEOUT_MS,
+          clientSessionTimeoutSeconds: 10,
+          ...(toolFilter ? { toolFilter } : {}),
+        }),
+      );
+    } else {
+      servers.push(
+        new MCPServerStdio({
+          name: definition.name,
+          fullCommand: definition.fullCommand,
+          cacheToolsList: true,
+          useStructuredContent: true,
+          timeout: definition.timeoutMs ?? DEFAULT_STDIO_TOOL_TIMEOUT_MS,
+          clientSessionTimeoutSeconds: 10,
+          ...(toolFilter ? { toolFilter } : {}),
+        }),
+      );
+    }
     descriptions.push({ name: definition.name, transport: "stdio" });
   }
 
