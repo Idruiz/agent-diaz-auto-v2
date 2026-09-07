@@ -111,8 +111,17 @@ export const V2ArtifactPlanToolInputSchema = z.object({
     .max(6)
     .nullable()
     .optional(),
+  // Keep provider-facing JSON Schema deliberately format-free. OpenAI strict
+  // function schemas reject JSON Schema format:"uri" even though Zod emits it
+  // for .url(). Canonical URL validation still runs immediately after tool
+  // parsing in normalizeV2ArtifactPlanToolInput via ArtifactPlanSchema.parse().
   sources: z
-    .array(z.object({ title: z.string().max(300), url: z.string().url() }))
+    .array(
+      z.object({
+        title: z.string().max(300),
+        url: z.string().min(1).max(2048),
+      }),
+    )
     .max(40)
     .nullable()
     .optional(),
