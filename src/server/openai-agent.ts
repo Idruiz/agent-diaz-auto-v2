@@ -39,6 +39,7 @@ import {
 } from "./skills.js";
 import { personaInstructions } from "./personas.js";
 import { runV2ArtifactRuntime } from "./v2/artifact-agent-runtime.js";
+import { artifactRecoveryDelay, beginArtifactExecution, finishArtifactExecution } from "./v2/crash-recovery.js";
 import {
   clearV2InfrastructureRetry,
   hasV2InfrastructureRetryPending,
@@ -866,6 +867,8 @@ export class AgentRunner {
     void this.run(jobId).finally(() => this.active.delete(jobId));
   }
 
+  isJobActive(jobId: string): boolean { return this.active.has(jobId); }
+
   resume(): void {
     const v2Enabled = process.env.AGENT_RUNTIME !== "legacy";
     for (const j of this.db
@@ -883,7 +886,17 @@ export class AgentRunner {
           jobId: j.id,
           kind: j.kind,
         });
-      this.start(j.id);
+      const root = path.join(this.config.artifactDir, ".agent-v2", j.id);
+      const delayMs = this.config.NODE_ENV === "test" ? 0 : artifactRecoveryDelay(root);
+      if (!delayMs) { this.start(j.id); continue; }
+      this.db.updateJob(j.id, {
+        message: `Recovering after server restart; automatic retry in ${Math.ceil(delayMs / 1000)} seconds`,
+      });
+      log("warn", "agent_v2.restart_recovery_scheduled", { jobId: j.id, delayMs });
+      setTimeout(() => {
+        const current = this.db.getJob(j.id);
+        if (current && ["queued", "running", "building", "blocked"].includes(current.status)) this.start(j.id);
+      }, delayMs).unref();
     }
   }
 
@@ -1370,6 +1383,8 @@ export class AgentRunner {
     ].includes(job.kind);
     if (!isArtifact) return this.runInternal(jobId);
     return withArtifactRunLog(this.config, jobId, async () => {
+      const executionRoot = path.join(this.config.artifactDir, ".agent-v2", jobId);
+      beginArtifactExecution(executionRoot);
       log("info", "artifact.run_log_started", {
         jobId,
         kind: job.kind,
@@ -1378,6 +1393,7 @@ export class AgentRunner {
       try {
         await this.runInternal(jobId);
       } finally {
+        finishArtifactExecution(executionRoot);
         const finalJob = this.db.getJob(jobId);
         log("info", "artifact.run_log_finished", {
           jobId,

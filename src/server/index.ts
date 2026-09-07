@@ -14,10 +14,22 @@ import { AgentRunner } from "./openai-agent.js";
 import { installArtifactExecutionGate } from "./artifact-execution-gate.js";
 import { log } from "./log.js";
 import { probeV2RuntimeReadiness } from "./v2/host-preflight.js";
+import { installProcessDiagnostics } from "./v2/process-health.js";
+import { cleanFailedWork, cleanStartEnabled } from "./clean-start.js";
+
+installProcessDiagnostics();
 
 const config = loadConfig();
 ensureDirs(config.dataDir, config.artifactDir, config.uploadDir);
 const db = openDatabase(config);
+let startupCleanupError: string | null = null;
+if (cleanStartEnabled()) {
+  try { cleanFailedWork(config, db, { boot: true }); }
+  catch (error) {
+    startupCleanupError = "Startup cleanup failed; see workspace.clean_start_failed in service logs";
+    log("error", "workspace.clean_start_failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
 const auth = createAuth(config, db);
 const runner = new AgentRunner(config, db);
 // One Render instance must never launch multiple Chromium-backed artifact
@@ -27,6 +39,10 @@ installArtifactExecutionGate(runner, db);
 const packageMeta = JSON.parse(fs.readFileSync(path.join(config.root, "package.json"), "utf8")) as { version: string; dependencies?: Record<string, string> };
 const exactDependencyVersion = (name: string) => String(packageMeta.dependencies?.[name] ?? "unknown").replace(/^[^0-9]*/, "");
 const agentRuntimeReadiness = await probeV2RuntimeReadiness(process.env);
+if (startupCleanupError) {
+  agentRuntimeReadiness.ready = false;
+  agentRuntimeReadiness.issues.push(startupCleanupError);
+}
 const app = express();
 app.disable("x-powered-by");
 app.use((req, res, next) => {
@@ -80,6 +96,7 @@ app.get("/version", (_req, res) =>
     agentReady: agentRuntimeReadiness.ready,
     sandboxProvider: agentRuntimeReadiness.sandboxProvider,
     mcpServerCount: agentRuntimeReadiness.mcpServerCount,
+    cleanStart: cleanStartEnabled(),
   }),
 );
 // Companion PDF/HTML presentation routes are additive and deliberately mounted
@@ -111,12 +128,14 @@ const server = app.listen(config.PORT, () => {
     env: config.NODE_ENV,
     agentRuntimeReadiness,
   });
-  runner.resume();
+  if (!cleanStartEnabled()) runner.resume();
 });
-const stop = () =>
+const stop = (signal: string) => {
+  log("warn", "server.shutdown_requested", { signal });
   server.close(() => {
     db.close();
     process.exit(0);
   });
+};
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);

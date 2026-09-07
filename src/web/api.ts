@@ -23,6 +23,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 export const api = {
+  openWorkspace: () => call<{ enabled: boolean; clearedJobs: number; removedPaths: number }>("/api/workspace/open", { method: "POST", body: "{}" }),
   session: () => call<{ authenticated: boolean }>("/api/session"),
   login: (password: string) =>
     call("/api/login", { method: "POST", body: JSON.stringify({ password }) }),

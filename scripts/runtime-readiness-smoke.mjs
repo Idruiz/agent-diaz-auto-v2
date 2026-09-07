@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
+import Database from "better-sqlite3";
 
 // Executed inside the production image, as its real runtime user, by Verify.
 const child = spawn(process.execPath, ["dist/server/index.js"], {
@@ -33,6 +35,26 @@ try {
     assert.equal(body.home.writable, true);
     assert.equal(body.chromium.available, true);
     assert.equal(body.chromium.launchVerified, true);
+    assert.equal((await fetch("http://127.0.0.1:3000/api/workspace/open", { method: "POST" })).status, 401);
+    const login = await fetch("http://127.0.0.1:3000/api/login", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "ci-readiness-no-real-secret" }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie").split(";")[0];
+    const database = new Database("/var/data/data/agent-diaz.sqlite");
+    try {
+      const at = new Date().toISOString();
+      database.prepare("INSERT INTO conversations(id,title,created_at,updated_at) VALUES(?,?,?,?)").run("ci-clean-conversation", "Failed test", at, at);
+      database.prepare("INSERT INTO jobs(id,kind,status,prompt,conversation_id,file_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)").run("ci-clean-job", "presentation", "failed", "Failed test", "ci-clean-conversation", "[]", at, at);
+      fs.mkdirSync("/var/data/artifacts/.agent-v2/ci-clean-job", { recursive: true });
+      fs.writeFileSync("/var/data/artifacts/.agent-v2/ci-clean-job/INFRA_RETRY.json", "{}");
+      const opened = await fetch("http://127.0.0.1:3000/api/workspace/open", { method: "POST", headers: { Cookie: cookie } });
+      assert.equal(opened.status, 200);
+      assert.equal((await opened.json()).clearedJobs, 1);
+      assert.equal(database.prepare("SELECT id FROM jobs WHERE id='ci-clean-job'").get(), undefined);
+      assert.equal(fs.existsSync("/var/data/artifacts/.agent-v2/ci-clean-job"), false);
+      console.log("Authenticated clean-on-open removed failed job and retry files");
+    } finally { database.close(); }
   } else {
     assert.equal(body.home.writable, false);
     assert.equal(body.chromium.launchVerified, false);

@@ -36,6 +36,7 @@ import {
   writeV2AttemptPlan,
 } from "./revision-ledger.js";
 import { createV2SandboxRuntime } from "./sandbox-runtime.js";
+import { processHealth } from "./process-health.js";
 import {
   cloudflareSandboxIdFromSession,
   prepareCloudflareWorkspace,
@@ -296,6 +297,7 @@ export async function runV2ArtifactRuntime(
         progress: lastProgress,
         lastActivity,
         lastTool,
+        ...processHealth(),
       });
     }, 5_000);
     heartbeat.unref?.();

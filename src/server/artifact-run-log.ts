@@ -33,6 +33,11 @@ export function appendCurrentArtifactLog(line: string): void {
   const context = artifactLogStorage.getStore();
   if (!context) return;
   try {
+    // Bound disk usage even if an SDK produces repeated errors during one run.
+    if (fs.existsSync(context.filePath) && fs.statSync(context.filePath).size >= 2 * 1024 * 1024) {
+      fs.rmSync(`${context.filePath}.1`, { force: true });
+      fs.renameSync(context.filePath, `${context.filePath}.1`);
+    }
     fs.appendFileSync(context.filePath, `${line}
 `, "utf8");
   } catch (error) {

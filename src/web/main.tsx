@@ -121,6 +121,7 @@ function Login({ onDone }: { onDone: () => void }) {
 }
 
 function App() {
+  const [workspaceOpened, setWorkspaceOpened] = useState(false);
   const [ready, setReady] = useState<boolean | null>(null),
     [jobs, setJobs] = useState<JobView[]>([]),
     [selected, setSelected] = useState<string | null>(null),
@@ -215,7 +216,18 @@ function App() {
       .catch(() => setReady(false));
   }, []);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready) { setWorkspaceOpened(false); return; }
+    let disposed = false;
+    void api.openWorkspace().then(() => {
+      if (!disposed) setWorkspaceOpened(true);
+    }).catch(error => {
+      console.error("workspace.clean_start_failed", error);
+      if (!disposed) setErr(`Could not prepare a clean workspace: ${error instanceof Error ? error.message : "Unknown error"}. Reload to retry.`);
+    });
+    return () => { disposed = true; };
+  }, [ready]);
+  useEffect(() => {
+    if (!ready || !workspaceOpened) return;
     void refresh();
     void api
       .skills()
@@ -226,7 +238,7 @@ function App() {
       });
     const timer = setInterval(() => void refresh(), selected ? 1800 : 15_000);
     return () => clearInterval(timer);
-  }, [ready, selected, conversationId]);
+  }, [ready, workspaceOpened, selected, conversationId]);
   useEffect(() => {
     setArtifactLogs(null);
     setArtifactLogsCopied(false);
@@ -935,6 +947,7 @@ function App() {
   };
 
   if (ready === null) return <div className="boot">Waking JEFE//AUTO…</div>;
+  if (ready && !workspaceOpened) return <div className="boot">{err || "Preparing a clean workspace…"}</div>;
   if (!ready) return <Login onDone={() => setReady(true)} />;
   return (
     <div className="shell">

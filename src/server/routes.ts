@@ -21,6 +21,7 @@ import { skills } from "./skills.js";
 import { modelProfileFor } from "./openai-agent.js";
 import { log } from "./log.js";
 import { readArtifactRunLog } from "./artifact-run-log.js";
+import { cleanFailedWork, cleanStartEnabled } from "./clean-start.js";
 
 export function apiRoutes(
   config: Config,
@@ -47,6 +48,11 @@ export function apiRoutes(
     auth.requireAuth(req, res, () => res.json({ authenticated: true })),
   );
   r.use(auth.requireAuth);
+  r.post("/workspace/open", (_req, res) => {
+    res.json(cleanStartEnabled()
+      ? { enabled: true, ...cleanFailedWork(config, db, { isActive: id => runner.isJobActive(id) }) }
+      : { enabled: false, clearedJobs: 0, removedPaths: 0 });
+  });
   r.get("/skills", (_req, res) =>
     res.json(skills.map(({ instructions, ...publicSkill }) => publicSkill)),
   );

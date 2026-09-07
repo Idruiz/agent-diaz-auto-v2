@@ -5,6 +5,7 @@ import {
 } from "@openai/agents/sandbox/local";
 import { log } from "../log.js";
 import path from "node:path";
+import { RenderSandboxClient } from "./render-sandbox.js";
 
 export const V2_SANDBOX_PROVIDERS = ["cloudflare", "docker", "render", "unix"] as const;
 export type V2SandboxProvider = (typeof V2_SANDBOX_PROVIDERS)[number];
@@ -137,7 +138,7 @@ export function createV2SandboxRuntime(
     });
     return {
       provider,
-      client: new UnixLocalSandboxClient({ workspaceBaseDir: storageDir }),
+      client: new RenderSandboxClient({ workspaceBaseDir: storageDir }),
     };
   }
 

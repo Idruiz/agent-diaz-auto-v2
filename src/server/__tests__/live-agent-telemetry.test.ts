@@ -1,4 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Manifest } from "@openai/agents/sandbox";
+import { createV2SandboxRuntime } from "../v2/sandbox-runtime.js";
+import { RenderSandboxClient } from "../v2/render-sandbox.js";
 import { describe, expect, it } from "vitest";
 
 describe("JEFE//AUTO live agent telemetry contract", () => {
@@ -22,10 +27,18 @@ describe("JEFE//AUTO live agent telemetry contract", () => {
     expect(source).toContain("agent_v2.mcp_server_connected");
   });
 
-  it("places Render sandbox workspaces on persistent storage", () => {
-    const source = fs.readFileSync("src/server/v2/sandbox-runtime.ts", "utf8");
-    expect(source).toContain("new UnixLocalSandboxClient({ workspaceBaseDir: storageDir })");
-    expect(source).toContain('persistentFilesystem: storageDir');
+  it("places Render sandbox workspaces on persistent storage", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "jefe-durable-"));
+    const runtime = createV2SandboxRuntime("durable-test", { NODE_ENV: "test", AGENT_SANDBOX_PROVIDER: "render", STORAGE_DIR: root });
+    if (!(runtime.client instanceof RenderSandboxClient)) throw new Error("Render client was not selected");
+    const session = await runtime.client.create({ manifest: new Manifest({ root: "/workspace" }) });
+    try {
+      const result = await session.exec({ cmd: "printf durable > proof.txt", login: false });
+      expect(result.exitCode).toBe(0);
+      const workspaces = fs.readdirSync(root);
+      expect(workspaces).toHaveLength(1);
+      expect(fs.readFileSync(path.join(root, workspaces[0]!, "proof.txt"), "utf8")).toBe("durable");
+    } finally { await session.close(); fs.rmSync(root, { recursive: true, force: true }); }
   });
 
   it("makes tool availability and active work explicit in the UI", () => {
