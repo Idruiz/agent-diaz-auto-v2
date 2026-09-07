@@ -23,6 +23,13 @@ describe("Agent Díaz V2 strict artifact tool contract", () => {
     const sdkParameters = buildTool.parameters as Record<string, any>;
     const sdkPlan = sdkParameters.properties?.plan;
     const sdkSection = sdkPlan?.properties?.sections?.items;
+    const sdkSources = sdkPlan?.properties?.sources;
+    const sdkSourceArray =
+      sdkSources?.anyOf?.find(
+        (candidate: Record<string, unknown>) => candidate.type === "array",
+      ) ?? sdkSources;
+    const sdkSourceUrl = sdkSourceArray?.items?.properties?.url;
+
     expect(sdkPlan?.required).toEqual(
       expect.arrayContaining([
         "title",
@@ -48,6 +55,8 @@ describe("Agent Díaz V2 strict artifact tool contract", () => {
         "imageQuery",
       ]),
     );
+    expect(sdkSourceUrl?.type).toBe("string");
+    expect(sdkSourceUrl?.format).toBeUndefined();
 
     const strictPayload = {
       title: "Strict contract probe",
@@ -102,6 +111,26 @@ describe("Agent Díaz V2 strict artifact tool contract", () => {
     expect(parsed.sections[0]?.chart).toBeUndefined();
     expect(parsed.sections[0]?.diagram).toBeUndefined();
     expect(parsed.sections[0]?.imageQuery).toBeUndefined();
+  });
+
+  it("keeps provider-facing source URLs format-free while canonical parsing still enforces URL validity", () => {
+    const validToolInput = V2ArtifactPlanToolInputSchema.parse({
+      title: "Source contract probe",
+      sections: [{ heading: "Home", body: "Welcome" }],
+      sources: [{ title: "OpenAI", url: "https://openai.com" }],
+    });
+
+    expect(normalizeV2ArtifactPlanToolInput(validToolInput).sources).toEqual([
+      { title: "OpenAI", url: "https://openai.com" },
+    ]);
+
+    const invalidToolInput = V2ArtifactPlanToolInputSchema.parse({
+      title: "Source contract probe",
+      sections: [{ heading: "Home", body: "Welcome" }],
+      sources: [{ title: "Bad source", url: "not-a-url" }],
+    });
+
+    expect(() => normalizeV2ArtifactPlanToolInput(invalidToolInput)).toThrow();
   });
 
   it("allows a two-page website plan instead of imposing a three-page floor", () => {
