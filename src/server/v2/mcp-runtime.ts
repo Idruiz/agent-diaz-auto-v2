@@ -25,7 +25,10 @@ const HttpMcpSchema = z.object({
 const StdioMcpSchema = z.object({
   transport: z.literal("stdio"),
   name: z.string().min(1).max(80),
-  fullCommand: z.string().min(1).max(2_000),
+  command: z.string().min(1).max(2_000),
+  args: z.array(z.string().max(2_000)).max(100).default([]),
+  env: z.record(z.string(), z.string().max(16_384)).optional(),
+  cwd: z.string().min(1).max(2_000).optional(),
   timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
   allowedTools: ToolNameListSchema,
   blockedTools: ToolNameListSchema,
@@ -52,23 +55,107 @@ const DEFAULT_STDIO_TOOL_TIMEOUT_MS = 90_000;
 const SHARED_BROWSER_ENDPOINT = "http://127.0.0.1:9222";
 const SHARED_BROWSER_START_TIMEOUT_MS = 15_000;
 const BROWSER_MCP_NODE_HEAP_MB = 96;
+const FALLBACK_CHILD_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export type BrowserAutonomyMode = "both" | "playwright" | "puppeteer" | "off";
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\"'\\"'`)}'`;
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function localMcpCommand(binary: string, args: string): string {
-  const executable = path.resolve(process.cwd(), "node_modules", ".bin", binary);
-  // MCPServerStdio parses fullCommand into an executable + argv; a leading
-  // VAR=value token is therefore treated as the executable and fails ENOENT.
-  // Use /usr/bin/env so NODE_OPTIONS is applied without requiring a shell.
-  return `/usr/bin/env NODE_OPTIONS=${shellQuote(`--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`)} ${shellQuote(executable)} ${args}`;
+function splitLegacyFullCommand(fullCommand: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  for (const character of fullCommand.trim()) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+        continue;
+      }
+      if (quote === '"' && character === "\\") {
+        escaped = true;
+        continue;
+      }
+      current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += character;
+  }
+
+  if (escaped || quote)
+    throw new Error("Legacy stdio fullCommand contains unterminated quoting");
+  if (current) tokens.push(current);
+  if (!tokens.length)
+    throw new Error("Legacy stdio fullCommand must contain an executable");
+  return tokens;
+}
+
+function normalizeLegacyStdioDefinitions(parsed: unknown): unknown {
+  if (!Array.isArray(parsed)) return parsed;
+  return parsed.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const definition = item as Record<string, unknown>;
+    if (definition.transport !== "stdio" || !("fullCommand" in definition))
+      return item;
+    if ("command" in definition)
+      throw new Error(
+        `MCP server '${String(definition.name ?? "stdio")}' cannot define both command and fullCommand`,
+      );
+    if (typeof definition.fullCommand !== "string") return item;
+    const [command, ...args] = splitLegacyFullCommand(definition.fullCommand);
+    const { fullCommand: _legacyFullCommand, ...rest } = definition;
+    return { ...rest, command, args };
+  });
+}
+
+function browserMcpEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const childEnv: Record<string, string> = {
+    NODE_OPTIONS: `--max-old-space-size=${BROWSER_MCP_NODE_HEAP_MB}`,
+    PATH: env.PATH?.trim() || FALLBACK_CHILD_PATH,
+    HOME: env.HOME?.trim() || "/home/diaz",
+  };
+  for (const key of ["TMPDIR", "LANG", "LC_ALL", "TZ"] as const) {
+    const value = env[key]?.trim();
+    if (value) childEnv[key] = value;
+  }
+  return childEnv;
+}
+
+function localMcpDefinition(
+  binary: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Pick<z.infer<typeof StdioMcpSchema>, "command" | "args" | "env" | "cwd"> {
+  return {
+    command: path.resolve(process.cwd(), "node_modules", ".bin", binary),
+    args,
+    env: browserMcpEnvironment(env),
+    cwd: process.cwd(),
+  };
 }
 
 export function browserAutonomyMode(
@@ -114,18 +201,20 @@ function builtInHostBrowserDefinitions(
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
-      fullCommand: localMcpCommand(
+      ...localMcpDefinition(
         "playwright-mcp",
-        `--cdp-endpoint=${shellQuote(SHARED_BROWSER_ENDPOINT)}`,
+        [`--cdp-endpoint=${SHARED_BROWSER_ENDPOINT}`],
+        env,
       ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
-      fullCommand: localMcpCommand(
+      ...localMcpDefinition(
         "chrome-devtools-mcp",
-        `--browser-url=${shellQuote(SHARED_BROWSER_ENDPOINT)} --no-usage-statistics`,
+        [`--browser-url=${SHARED_BROWSER_ENDPOINT}`, "--no-usage-statistics"],
+        env,
       ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
@@ -136,9 +225,16 @@ function builtInHostBrowserDefinitions(
     definitions.push({
       transport: "stdio",
       name: "Playwright Browser",
-      fullCommand: localMcpCommand(
+      ...localMcpDefinition(
         "playwright-mcp",
-        `--headless --isolated --no-sandbox --executable-path ${shellQuote(executable)}`,
+        [
+          "--headless",
+          "--isolated",
+          "--no-sandbox",
+          "--executable-path",
+          executable,
+        ],
+        env,
       ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
@@ -146,9 +242,18 @@ function builtInHostBrowserDefinitions(
     definitions.push({
       transport: "stdio",
       name: "Puppeteer DevTools",
-      fullCommand: localMcpCommand(
+      ...localMcpDefinition(
         "chrome-devtools-mcp",
-        `--headless --isolated --executablePath ${shellQuote(executable)} --chromeArg=--no-sandbox --chromeArg=--disable-dev-shm-usage --no-usage-statistics`,
+        [
+          "--headless",
+          "--isolated",
+          "--executablePath",
+          executable,
+          "--chromeArg=--no-sandbox",
+          "--chromeArg=--disable-dev-shm-usage",
+          "--no-usage-statistics",
+        ],
+        env,
       ),
       timeoutMs: DEFAULT_STDIO_TOOL_TIMEOUT_MS,
     });
@@ -201,6 +306,7 @@ export function parseV2McpDefinitions(
       );
     }
   }
+  parsed = normalizeLegacyStdioDefinitions(parsed);
   const result = McpDefinitionsSchema.safeParse(parsed);
   if (!result.success)
     throw new Error(
@@ -334,7 +440,10 @@ export function createV2McpRuntime(
     servers.push(
       new MCPServerStdio({
         name: definition.name,
-        fullCommand: definition.fullCommand,
+        command: definition.command,
+        args: definition.args,
+        ...(definition.env ? { env: definition.env } : {}),
+        ...(definition.cwd ? { cwd: definition.cwd } : {}),
         cacheToolsList: true,
         useStructuredContent: true,
         timeout: definition.timeoutMs ?? DEFAULT_STDIO_TOOL_TIMEOUT_MS,
