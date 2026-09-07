@@ -103,6 +103,8 @@ jobs:
           docker run --rm --entrypoint npx jefe-auto-verify:${{ github.sha }} --no-install @playwright/mcp --help
           docker run --rm --entrypoint npx jefe-auto-verify:${{ github.sha }} --no-install chrome-devtools-mcp --help
           docker run --rm --entrypoint node jefe-auto-verify:${{ github.sha }} --input-type=module -e 'import puppeteer from "puppeteer"; const browser = await puppeteer.launch({executablePath:"/usr/bin/chromium",headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]}); const page = await browser.newPage(); await page.setContent("<title>JEFE AUTO</title>"); if ((await page.title()) !== "JEFE AUTO") process.exit(1); await browser.close(); console.log("Puppeteer browser smoke passed");'
+          # Critical regression: exercise the exact MCPServerStdio command/args/env path used by production.
+          docker run --rm --entrypoint node jefe-auto-verify:${{ github.sha }} dist/server/mcp-process-smoke.js
       - name: Verify production readiness and failed HOME diagnostics
         run: |
           docker run --rm -i \
