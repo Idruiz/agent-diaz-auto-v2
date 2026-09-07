@@ -1,0 +1,87 @@
+name: Live production endpoint proof
+
+on:
+  push:
+    branches:
+      - diagnostic/live-production-proof
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BASE_URL: https://jefe-auto.onrender.com
+      DIAZ_ADMIN_PASSWORD: ${{ secrets.DIAZ_ADMIN_PASSWORD }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+    steps:
+      - name: Prove public production endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in healthz readyz version; do
+            echo "=== /${path} ==="
+            body="$(curl --fail --silent --show-error --retry 3 --retry-delay 2 "${BASE_URL}/${path}")"
+            printf '%s\n' "$body"
+            echo "$body" | jq -e . >/dev/null
+          done
+
+          ready="$(curl --fail --silent --show-error "${BASE_URL}/readyz")"
+          echo "$ready" | jq -e '.ready == true and .sandboxProvider == "render" and .storageWritable == true and .browserMcpConfigured == true and .chromium.available == true and .chromium.launchVerified == true' >/dev/null
+
+      - name: Attempt authenticated live one-page website proof when repository password secret exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="${DIAZ_ADMIN_PASSWORD:-${ADMIN_PASSWORD:-}}"
+          if [ -z "$password" ]; then
+            echo "AUTH_PROOF_SKIPPED=no matching repository Actions secret"
+            exit 0
+          fi
+
+          cookie_jar="$(mktemp)"
+          trap 'rm -f "$cookie_jar"' EXIT
+          curl --fail --silent --show-error \
+            -c "$cookie_jar" \
+            -H 'content-type: application/json' \
+            -H "origin: ${BASE_URL}" \
+            -d "$(jq -nc --arg password "$password" '{password:$password}')" \
+            "${BASE_URL}/api/login" >/dev/null
+
+          conversation="$(curl --fail --silent --show-error -b "$cookie_jar" \
+            -H 'content-type: application/json' -H "origin: ${BASE_URL}" \
+            -d '{"title":"Live strict-tool contract proof"}' \
+            "${BASE_URL}/api/conversations")"
+          conversation_id="$(echo "$conversation" | jq -r '.id')"
+          test -n "$conversation_id" && test "$conversation_id" != null
+
+          prompt='Create a tiny one-page website titled JEFE ALIVE. Include one heading and one short paragraph saying the agent filesystem/build path is alive. Keep it intentionally simple.'
+          job="$(curl --fail --silent --show-error -b "$cookie_jar" \
+            -H 'content-type: application/json' -H "origin: ${BASE_URL}" \
+            -d "$(jq -nc --arg prompt "$prompt" --arg conversationId "$conversation_id" '{kind:"website",prompt:$prompt,conversationId:$conversationId,fileIds:[]}')" \
+            "${BASE_URL}/api/jobs")"
+          job_id="$(echo "$job" | jq -r '.id')"
+          echo "LIVE_JOB_ID=$job_id"
+          test -n "$job_id" && test "$job_id" != null
+
+          deadline=$((SECONDS + 360))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            current="$(curl --fail --silent --show-error -b "$cookie_jar" "${BASE_URL}/api/jobs/${job_id}")"
+            status="$(echo "$current" | jq -r '.status')"
+            progress="$(echo "$current" | jq -r '.progress')"
+            message="$(echo "$current" | jq -r '.message // ""')"
+            echo "status=$status progress=$progress message=$message"
+            case "$status" in
+              completed)
+                echo "$current" | jq -e '.artifacts | length >= 1' >/dev/null
+                echo "AUTH_LIVE_AGENT_PROOF=PASS"
+                exit 0
+                ;;
+              failed|blocked|cancelled)
+                echo "$current" | jq .
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Timed out waiting for live job $job_id" >&2
+          exit 1
