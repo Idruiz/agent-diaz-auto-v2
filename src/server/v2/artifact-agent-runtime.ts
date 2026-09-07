@@ -42,10 +42,10 @@ import {
   prepareCloudflareWorkspace,
 } from "./cloudflare-workspace.js";
 import {
-  ArtifactPlanSchema,
-  type ArtifactPlan,
-  type JobKind,
-} from "../../shared/contracts.js";
+  V2ArtifactPlanToolInputSchema,
+  normalizeV2ArtifactPlanToolInput,
+} from "./artifact-tool-contract.js";
+import { type JobKind } from "../../shared/contracts.js";
 
 export interface V2ArtifactAttachment {
   name: string;
@@ -314,12 +314,13 @@ export async function runV2ArtifactRuntime(
     description:
       "Render a complete Agent Díaz artifact candidate and run the real deterministic production validators. On failure, returns the exact failure class/rule so you can revise and try again. On success, returns a buildId that can be accepted.",
     parameters: z.object({
-      plan: ArtifactPlanSchema,
+      plan: V2ArtifactPlanToolInputSchema,
     }),
-    async execute({ plan }: { plan: ArtifactPlan }) {
+    async execute({ plan: toolPlan }) {
       if (input.signal?.aborted) throw new Error("Agent Díaz V2 run cancelled");
       attempt += 1;
       emitAgentProgress(50, `Build attempt ${attempt} started · rendering and validating`);
+      const plan = normalizeV2ArtifactPlanToolInput(toolPlan);
       const { attemptDir, planSha } = writeV2AttemptPlan(
         workRoot,
         attempt,
@@ -682,12 +683,33 @@ export async function runV2ArtifactRuntime(
       stopHeartbeat();
     }
 
-    if (!acceptedBuildId)
+    if (!acceptedBuildId) {
+      const finalOutput = result?.finalOutput;
+      log("warn", "agent_v2.agent_loop_ended", {
+        jobId: input.jobId,
+        kind: input.kind,
+        attempt,
+        hadFinalOutput: finalOutput !== undefined && finalOutput !== null,
+        finalOutput:
+          typeof finalOutput === "string"
+            ? finalOutput.slice(0, 4000)
+            : finalOutput === undefined || finalOutput === null
+              ? null
+              : "[non-string final output omitted]",
+      });
       throw new ArtifactPipelineError(
-        "INFRA",
-        "Agent Díaz V2 agent loop ended without accepting a validated artifact; the run will resume from its revision ledger.",
-        { ruleOrPart: "agent-v2-agent-loop-ended" },
+        attempt === 0 ? "BUILD" : "PLAN_CONTENT",
+        attempt === 0
+          ? "Agent Díaz V2 agent loop ended before the artifact build tool executed. The tool/provider contract rejected or bypassed every build attempt; inspect the tool-call diagnostic instead of retrying infrastructure."
+          : `Agent Díaz V2 agent loop ended after ${attempt} build attempt${attempt === 1 ? "" : "s"} without accepting a validated artifact.`,
+        {
+          ruleOrPart:
+            attempt === 0
+              ? "agent-v2-tool-contract-no-build"
+              : "agent-v2-agent-loop-ended",
+        },
       );
+    }
     const accepted = successfulBuilds.get(acceptedBuildId);
     if (!accepted)
       throw new ArtifactPipelineError(
