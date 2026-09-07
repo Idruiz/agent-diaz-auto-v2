@@ -141,7 +141,10 @@ export const ApprovalDecisionSchema = z.object({
 export const ArtifactRequirementSchema = z.object({
   id: z.string().regex(/^R[1-9][0-9]*$/).max(8),
   text: z.string().min(2).max(400),
-  mandatory: z.boolean().default(true),
+  mandatory: z
+    .boolean()
+    .nullish()
+    .transform((value) => value ?? true),
 });
 export const ArtifactActivitySchema = z.object({
   type: z.enum([
@@ -157,8 +160,16 @@ export const ArtifactActivitySchema = z.object({
   // PPTX templates can display every accepted value without slicing or ellipsis.
   directions: z.array(z.string().min(2).max(180)).min(2).max(5),
   prompts: z.array(z.string().min(2).max(240)).min(1).max(6),
-  sentenceFrames: z.array(z.string().min(2).max(180)).max(4).default([]),
-  cornerLabels: z.array(z.string().min(1).max(80)).max(4).default([]),
+  sentenceFrames: z
+    .array(z.string().min(2).max(180))
+    .max(4)
+    .nullish()
+    .transform((value) => value ?? []),
+  cornerLabels: z
+    .array(z.string().min(1).max(80))
+    .max(4)
+    .nullish()
+    .transform((value) => value ?? []),
 });
 export const ArtifactLayoutSchema = z.enum([
   "auto",
@@ -178,8 +189,22 @@ export const ArtifactLayoutSchema = z.enum([
 
 export const ArtifactPlanSchema = z.object({
   title: z.string().min(1).max(160),
-  subtitle: z.string().max(240).optional().default(""),
-  requirements: z.array(ArtifactRequirementSchema).min(1).max(30).default([{ id: "R1", text: "Deliver the requested artifact", mandatory: false }]),
+  subtitle: z
+    .string()
+    .max(240)
+    .nullish()
+    .transform((value) => value ?? ""),
+  requirements: z
+    .array(ArtifactRequirementSchema)
+    .min(1)
+    .max(30)
+    .nullish()
+    .transform(
+      (value) =>
+        value ?? [
+          { id: "R1", text: "Deliver the requested artifact", mandatory: false },
+        ],
+    ),
   sections: z
     .array(
       z.object({
@@ -188,11 +213,27 @@ export const ArtifactPlanSchema = z.object({
         // the compiler; individual strings are never silently truncated.
         heading: z.string().min(1).max(92),
         body: z.string().min(1).max(8000),
-        bullets: z.array(z.string().max(180)).max(12).default([]),
-        speakerNotes: z.string().max(2000).optional().default(""),
-        requirementIds: z.array(z.string().regex(/^R[1-9][0-9]*$/).max(8)).max(30).default([]),
-        layout: ArtifactLayoutSchema.default("auto"),
-        activity: ArtifactActivitySchema.optional(),
+        bullets: z
+          .array(z.string().max(180))
+          .max(12)
+          .nullish()
+          .transform((value) => value ?? []),
+        speakerNotes: z
+          .string()
+          .max(2000)
+          .nullish()
+          .transform((value) => value ?? ""),
+        requirementIds: z
+          .array(z.string().regex(/^R[1-9][0-9]*$/).max(8))
+          .max(30)
+          .nullish()
+          .transform((value) => value ?? []),
+        layout: ArtifactLayoutSchema.nullish().transform(
+          (value) => value ?? "auto",
+        ),
+        activity: ArtifactActivitySchema.nullish().transform(
+          (value) => value ?? undefined,
+        ),
         table: z
           .object({
             title: z.string().max(140),
@@ -202,7 +243,8 @@ export const ArtifactPlanSchema = z.object({
               .min(1)
               .max(30),
           })
-          .optional(),
+          .nullish()
+          .transform((value) => value ?? undefined),
         chart: z
           .object({
             title: z.string().max(120),
@@ -217,18 +259,37 @@ export const ArtifactPlanSchema = z.object({
               )
               .min(1)
               .max(5),
-            unit: z.string().max(40).optional().default(""),
-            sourceNote: z.string().max(180).optional().default(""),
+            unit: z
+              .string()
+              .max(40)
+              .nullish()
+              .transform((value) => value ?? ""),
+            sourceNote: z
+              .string()
+              .max(180)
+              .nullish()
+              .transform((value) => value ?? ""),
           })
-          .optional(),
+          .nullish()
+          .transform((value) => value ?? undefined),
         diagram: z
           .object({
             title: z.string().max(120),
             nodes: z.array(z.string().max(100)).min(2).max(8),
-            caption: z.string().max(300).optional().default(""),
+            caption: z
+              .string()
+              .max(300)
+              .nullish()
+              .transform((value) => value ?? ""),
           })
-          .optional(),
-        imageQuery: z.string().min(2).max(180).optional(),
+          .nullish()
+          .transform((value) => value ?? undefined),
+        imageQuery: z
+          .string()
+          .min(2)
+          .max(180)
+          .nullish()
+          .transform((value) => value ?? undefined),
       }),
     )
     .min(1)
@@ -241,17 +302,23 @@ export const ArtifactPlanSchema = z.object({
           .regex(/^[a-z0-9-]+$/)
           .max(50),
         title: z.string().min(1).max(120),
-        description: z.string().max(240).default(""),
+        description: z
+          .string()
+          .max(240)
+          .nullish()
+          .transform((value) => value ?? ""),
         sectionHeadings: z.array(z.string().min(1).max(180)).min(1).max(10),
       }),
     )
-    .min(3)
+    .min(1)
     .max(6)
-    .optional(),
+    .nullish()
+    .transform((value) => value ?? undefined),
   sources: z
     .array(z.object({ title: z.string().max(300), url: z.string().url() }))
     .max(40)
-    .default([]),
+    .nullish()
+    .transform((value) => value ?? []),
 });
 export type ArtifactPlan = z.infer<typeof ArtifactPlanSchema>;
 
