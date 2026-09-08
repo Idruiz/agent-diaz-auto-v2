@@ -9,6 +9,7 @@ const SetupResponseSchema = z.object({
   sandboxId: z.string().min(1),
   workspaceRoot: z.literal("/workspace"),
   persistentPath: z.literal("/workspace/persist"),
+  keepAlive: z.literal(true),
   filesystem: z.object({
     kind: z.literal("linux-r2-mounted"),
     posix: z.literal(true),
@@ -20,8 +21,26 @@ const SetupResponseSchema = z.object({
   }),
 });
 
+const ReleaseResponseSchema = z.object({
+  ok: z.literal(true),
+  sandboxId: z.string().min(1),
+  released: z.literal(true),
+  keepAlive: z.literal(false),
+});
+
+type ClosableCloudflareSession = {
+  close?: (...args: unknown[]) => unknown;
+};
+
+// cloudflareSandboxIdFromSession() is called immediately before setup by the
+// existing artifact runtime. Retain only that short-lived association so a
+// successful setup can wrap the session's existing close() and guarantee the
+// bridge keepAlive is released without changing the hard-earned agent loop.
+const sessionsAwaitingManagedClose = new Map<string, ClosableCloudflareSession>();
+
 export interface CloudflareWorkspacePreparation {
   persistentPath: "/workspace/persist";
+  keepAlive: true;
   mcpDefinitions: V2InternalMcpDefinition[];
   filesystem: {
     kind: "linux-r2-mounted";
@@ -54,7 +73,84 @@ export function cloudflareSandboxIdFromSession(session: unknown): string {
     ?.sandboxId;
   if (typeof value !== "string" || !value.trim())
     throw new Error("Cloudflare sandbox session did not expose a sandboxId");
-  return value.trim();
+  const sandboxId = value.trim();
+  if (session && typeof session === "object")
+    sessionsAwaitingManagedClose.set(
+      sandboxId,
+      session as ClosableCloudflareSession,
+    );
+  return sandboxId;
+}
+
+function authenticatedHeaders(apiKey: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function releaseRequest(args: {
+  sandboxId: string;
+  workerUrl: string;
+  apiKey: string;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  const worker = workerUrl(args.workerUrl);
+  const apiKey = args.apiKey.trim();
+  if (!apiKey)
+    throw new Error(
+      "CLOUDFLARE_SANDBOX_API_KEY is required to release the JEFE//AUTO workspace",
+    );
+  const endpoint = new URL("/jefe/release", worker);
+  const response = await (args.fetchImpl ?? fetch)(endpoint, {
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+    headers: authenticatedHeaders(apiKey),
+    body: JSON.stringify({ sandboxId: args.sandboxId }),
+  });
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 800);
+    throw new Error(
+      `Cloudflare JEFE workspace release failed (${response.status}): ${body || response.statusText}`,
+    );
+  }
+  const parsed = ReleaseResponseSchema.parse(await response.json());
+  if (parsed.sandboxId !== args.sandboxId)
+    throw new Error("Cloudflare workspace release returned the wrong sandboxId");
+}
+
+function armManagedSessionClose(args: {
+  sandboxId: string;
+  workerUrl: string;
+  apiKey: string;
+  fetchImpl?: typeof fetch;
+}): void {
+  const session = sessionsAwaitingManagedClose.get(args.sandboxId);
+  const originalClose = session?.close;
+  if (!session || typeof originalClose !== "function") {
+    sessionsAwaitingManagedClose.delete(args.sandboxId);
+    return;
+  }
+
+  let closed = false;
+  session.close = async (...closeArgs: unknown[]) => {
+    if (closed) return;
+    closed = true;
+    sessionsAwaitingManagedClose.delete(args.sandboxId);
+    let releaseError: unknown;
+    try {
+      await releaseRequest(args);
+    } catch (error) {
+      releaseError = error;
+    }
+    try {
+      await originalClose.apply(session, closeArgs);
+    } finally {
+      // Release failure must never prevent the official SDK session close.
+      // Throw afterwards so the existing runtime logs a loud cleanup warning.
+      if (releaseError) throw releaseError;
+    }
+  };
 }
 
 export async function prepareCloudflareWorkspace(args: {
@@ -79,10 +175,7 @@ export async function prepareCloudflareWorkspace(args: {
     signal: args.signal
       ? AbortSignal.any([args.signal, AbortSignal.timeout(120_000)])
       : AbortSignal.timeout(120_000),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: authenticatedHeaders(apiKey),
     body: JSON.stringify({
       jobId: args.jobId,
       sandboxId: args.sandboxId,
@@ -90,11 +183,23 @@ export async function prepareCloudflareWorkspace(args: {
     }),
   });
   if (!response.ok) {
+    sessionsAwaitingManagedClose.delete(args.sandboxId);
     const body = (await response.text()).slice(0, 800);
     throw new Error(
       `Cloudflare JEFE workspace setup failed (${response.status}): ${body || response.statusText}`,
     );
   }
+
+  // From this point the bridge has enabled keepAlive. Arm cleanup before
+  // parsing the response so even a contract/schema error still releases it
+  // when the artifact runtime reaches sandboxSession.close() in its finally.
+  armManagedSessionClose({
+    sandboxId: args.sandboxId,
+    workerUrl: args.workerUrl,
+    apiKey,
+    fetchImpl: args.fetchImpl,
+  });
+
   const parsed = SetupResponseSchema.parse(await response.json());
   if (parsed.sandboxId !== args.sandboxId)
     throw new Error("Cloudflare workspace setup returned the wrong sandboxId");
@@ -134,7 +239,18 @@ export async function prepareCloudflareWorkspace(args: {
 
   return {
     persistentPath: parsed.persistentPath,
+    keepAlive: parsed.keepAlive,
     mcpDefinitions,
     filesystem: parsed.filesystem,
   };
+}
+
+export async function releaseCloudflareWorkspace(args: {
+  sandboxId: string;
+  workerUrl: string;
+  apiKey: string;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  sessionsAwaitingManagedClose.delete(args.sandboxId);
+  await releaseRequest(args);
 }

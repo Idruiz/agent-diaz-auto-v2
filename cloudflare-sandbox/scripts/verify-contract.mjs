@@ -13,6 +13,10 @@ const requiredSource = [
   'mcp-proxy --server stream',
   'chrome-devtools-mcp --headless',
   'jefe-posix-',
+  'await sandbox.setKeepAlive(true)',
+  'await sandbox.setKeepAlive(false)',
+  'url.pathname === "/jefe/release"',
+  'keepAliveManaged: true',
 ];
 for (const token of requiredSource)
   if (!source.includes(token)) throw new Error(`Missing Cloudflare contract: ${token}`);
@@ -30,4 +34,4 @@ if (!wrangler.includes('"binding": "JEFE_FS"')) throw new Error("R2 binding miss
 if (!wrangler.includes('"bucket_name": "jefe-auto-fs"')) throw new Error("R2 bucket missing");
 if (/trycloudflare|quick.?tunnel/i.test(source + dockerfile))
   throw new Error("Public quick tunnels are forbidden for browser MCP transport");
-console.log("Cloudflare real-filesystem contract passed");
+console.log("Cloudflare real-filesystem and managed-lifecycle contract passed");

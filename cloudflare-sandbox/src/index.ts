@@ -149,32 +149,88 @@ async function setup(request: Request, env: Env): Promise<Response> {
     enableDefaultSession: false,
   });
 
-  await stopProcessIfPresent(sandbox, PLAYWRIGHT_PROCESS);
-  await stopProcessIfPresent(sandbox, PUPPETEER_PROCESS);
-  await prepareFilesystem(sandbox, jobId);
+  // Agent/tool runs can legitimately be quiet for longer than the normal idle
+  // window. Cloudflare Sandbox keepAlive emits platform heartbeats every ~30s,
+  // so the execution container cannot disappear merely because the model is
+  // reasoning or a long tool call has not produced traffic yet. The host must
+  // call /jefe/release in a finally path to turn this back off.
+  await sandbox.setKeepAlive(true);
 
-  const browsers = { playwright: false, puppeteer: false };
-  if (mode === "both" || mode === "playwright") {
-    await startPlaywright(sandbox);
-    browsers.playwright = true;
-  }
-  if (mode === "both" || mode === "puppeteer") {
-    await startPuppeteer(sandbox);
-    browsers.puppeteer = true;
-  }
+  try {
+    await stopProcessIfPresent(sandbox, PLAYWRIGHT_PROCESS);
+    await stopProcessIfPresent(sandbox, PUPPETEER_PROCESS);
+    await prepareFilesystem(sandbox, jobId);
 
-  return json({
-    ok: true,
-    sandboxId,
-    workspaceRoot: "/workspace",
-    persistentPath: PERSIST_PATH,
-    filesystem: {
-      kind: "linux-r2-mounted",
-      posix: true,
-      persistent: true,
-    },
-    browsers,
+    const browsers = { playwright: false, puppeteer: false };
+    if (mode === "both" || mode === "playwright") {
+      await startPlaywright(sandbox);
+      browsers.playwright = true;
+    }
+    if (mode === "both" || mode === "puppeteer") {
+      await startPuppeteer(sandbox);
+      browsers.puppeteer = true;
+    }
+
+    return json({
+      ok: true,
+      sandboxId,
+      workspaceRoot: "/workspace",
+      persistentPath: PERSIST_PATH,
+      keepAlive: true,
+      filesystem: {
+        kind: "linux-r2-mounted",
+        posix: true,
+        persistent: true,
+      },
+      browsers,
+    });
+  } catch (error) {
+    // Setup did not hand ownership to a running job. Avoid leaking a pinned
+    // container if mounting R2 or booting either browser MCP fails.
+    try {
+      await sandbox.setKeepAlive(false);
+    } catch (releaseError) {
+      console.error("jefe_keepalive_release_failed", {
+        sandboxId,
+        phase: "setup-error",
+        message: releaseError instanceof Error ? releaseError.message : String(releaseError),
+      });
+    }
+    throw error;
+  }
+}
+
+async function release(request: Request, env: Env): Promise<Response> {
+  const body = (await request.json()) as Record<string, unknown>;
+  const sandboxId = safeToken(body.sandboxId, "sandboxId");
+  const sandbox = getSandbox(env.Sandbox, sandboxId, {
+    transport: "rpc",
+    enableDefaultSession: false,
   });
+  const errors: string[] = [];
+
+  // Browser MCP processes are task-scoped. Stop them before allowing the
+  // sandbox to idle so a completed job never keeps Chromium resident.
+  for (const processId of [PLAYWRIGHT_PROCESS, PUPPETEER_PROCESS]) {
+    try {
+      await stopProcessIfPresent(sandbox, processId);
+    } catch (error) {
+      errors.push(`${processId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  try {
+    await sandbox.setKeepAlive(false);
+  } catch (error) {
+    errors.push(`keepAlive: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (errors.length) {
+    console.error("jefe_release_partial_failure", { sandboxId, errors });
+    return json({ ok: false, sandboxId, released: false, errors }, 500);
+  }
+
+  return json({ ok: true, sandboxId, released: true, keepAlive: false });
 }
 
 async function proxyMcp(request: Request, env: Env, match: RegExpMatchArray): Promise<Response> {
@@ -197,12 +253,19 @@ const sandboxBridge = bridge({
     try {
       if (url.pathname === "/jefe/setup" && request.method === "POST")
         return await setup(request, env);
+      if (url.pathname === "/jefe/release" && request.method === "POST")
+        return await release(request, env);
       const match = url.pathname.match(
         /^\/jefe\/mcp\/([^/]+)\/(playwright|puppeteer)$/,
       );
       if (match) return await proxyMcp(request, env, match);
       if (url.pathname === "/jefe/health")
-        return json({ ok: true, filesystem: "r2-mounted", browsers: "in-sandbox" });
+        return json({
+          ok: true,
+          filesystem: "r2-mounted",
+          browsers: "in-sandbox",
+          keepAliveManaged: true,
+        });
       return new Response("Not Found", { status: 404 });
     } catch (error) {
       console.error("jefe_bridge_error", {
@@ -212,7 +275,7 @@ const sandboxBridge = bridge({
       return json(
         {
           ok: false,
-          error: error instanceof Error ? error.message : "Cloudflare sandbox setup failed",
+          error: error instanceof Error ? error.message : "Cloudflare sandbox operation failed",
         },
         500,
       );
