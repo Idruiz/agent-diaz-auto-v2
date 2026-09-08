@@ -6,6 +6,7 @@ on:
       - main
       - "build/**"
       - "upgrade/**"
+      - "cloudflare/**"
   pull_request:
 
 permissions:
