@@ -180,6 +180,7 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
           sandboxId: "cf-123",
           workspaceRoot: "/workspace",
           persistentPath: "/workspace/persist",
+          keepAlive: true,
           filesystem: {
             kind: "linux-r2-mounted",
             posix: true,
