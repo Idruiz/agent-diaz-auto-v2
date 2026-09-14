@@ -73,24 +73,14 @@ function browserMode(value: unknown): BrowserMode {
   throw new Error("browserMode must be both, playwright, puppeteer, or off");
 }
 
-async function stopProcessIfPresent(
-  sandbox: ReturnType<typeof getSandbox<Sandbox>>,
-  processId: string,
-): Promise<void> {
-  const process = await sandbox.getProcess(processId);
-  if (process) await process.kill();
-}
-
 async function prepareFilesystem(
   sandbox: ReturnType<typeof getSandbox<Sandbox>>,
   jobId: string,
 ): Promise<void> {
-  try {
-    await sandbox.unmountBucket(PERSIST_PATH);
-  } catch {
-    // First setup has nothing mounted. A retry deliberately remounts the same
-    // R2 prefix to guarantee that the requested job owns this mount point.
-  }
+  // Each CloudflareSandboxClient session supplies a fresh sandboxId, so setup
+  // should mount once. Avoid a speculative unmount on a brand-new container:
+  // Cloudflare documents bucket mounts as sandbox-wide and recommends mounting
+  // once per sandbox.
   await sandbox.mountBucket("JEFE_FS", PERSIST_PATH, {
     prefix: `/jobs/${jobId}/`,
     readOnly: false,
@@ -101,7 +91,7 @@ async function prepareFilesystem(
   const sentinel = `.jefe-posix-${crypto.randomUUID().replaceAll("-", "")}`;
   const result = await sandbox.exec(
     `set -eu; cd ${PERSIST_PATH}; printf 'jefe-posix-ok' > ${sentinel}; test -f ${sentinel}; mv ${sentinel} ${sentinel}.moved; grep -q 'jefe-posix-ok' ${sentinel}.moved; rm ${sentinel}.moved; mkdir -p browser/playwright browser/devtools recovery`,
-    { cwd: "/workspace" },
+    { cwd: "/workspace", timeout: 20_000 },
   );
   if (!result.success)
     throw new Error(`R2 POSIX mount verification failed: ${result.stderr.slice(0, 400)}`);
@@ -149,28 +139,63 @@ async function setup(request: Request, env: Env): Promise<Response> {
     enableDefaultSession: false,
   });
 
+  const phase = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    console.log("jefe_setup_phase", { sandboxId, jobId, phase: name, state: "start" });
+    try {
+      const value = await action();
+      console.log("jefe_setup_phase", {
+        sandboxId,
+        jobId,
+        phase: name,
+        state: "done",
+        durationMs: Date.now() - startedAt,
+      });
+      return value;
+    } catch (error) {
+      console.error("jefe_setup_phase", {
+        sandboxId,
+        jobId,
+        phase: name,
+        state: "error",
+        durationMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
+
   // Agent/tool runs can legitimately be quiet for longer than the normal idle
   // window. Cloudflare Sandbox keepAlive emits platform heartbeats every ~30s,
   // so the execution container cannot disappear merely because the model is
   // reasoning or a long tool call has not produced traffic yet. The host must
   // call /jefe/release in a finally path to turn this back off.
-  await sandbox.setKeepAlive(true);
+  await phase("keepalive", () => sandbox.setKeepAlive(true));
 
   try {
-    await stopProcessIfPresent(sandbox, PLAYWRIGHT_PROCESS);
-    await stopProcessIfPresent(sandbox, PUPPETEER_PROCESS);
-    await prepareFilesystem(sandbox, jobId);
+    await phase("filesystem", () => prepareFilesystem(sandbox, jobId));
 
     const browsers = { playwright: false, puppeteer: false };
+    const browserStarts: Promise<void>[] = [];
     if (mode === "both" || mode === "playwright") {
-      await startPlaywright(sandbox);
-      browsers.playwright = true;
+      browserStarts.push(
+        phase("playwright", async () => {
+          await startPlaywright(sandbox);
+          browsers.playwright = true;
+        }),
+      );
     }
     if (mode === "both" || mode === "puppeteer") {
-      await startPuppeteer(sandbox);
-      browsers.puppeteer = true;
+      browserStarts.push(
+        phase("puppeteer", async () => {
+          await startPuppeteer(sandbox);
+          browsers.puppeteer = true;
+        }),
+      );
     }
+    if (browserStarts.length) await Promise.all(browserStarts);
 
+    console.log("jefe_setup_complete", { sandboxId, jobId, mode, browsers });
     return json({
       ok: true,
       sandboxId,
@@ -185,16 +210,26 @@ async function setup(request: Request, env: Env): Promise<Response> {
       browsers,
     });
   } catch (error) {
-    // Setup did not hand ownership to a running job. Avoid leaking a pinned
-    // container if mounting R2 or booting either browser MCP fails.
+    // Setup did not hand ownership to a running job. Destroy the failed
+    // sandbox so a keepAlive container cannot pin the single-instance pool.
     try {
-      await sandbox.setKeepAlive(false);
-    } catch (releaseError) {
-      console.error("jefe_keepalive_release_failed", {
+      await sandbox.destroy();
+      console.log("jefe_setup_failed_sandbox_destroyed", { sandboxId, jobId });
+    } catch (destroyError) {
+      console.error("jefe_setup_destroy_failed", {
         sandboxId,
-        phase: "setup-error",
-        message: releaseError instanceof Error ? releaseError.message : String(releaseError),
+        jobId,
+        message: destroyError instanceof Error ? destroyError.message : String(destroyError),
       });
+      try {
+        await sandbox.setKeepAlive(false);
+      } catch (releaseError) {
+        console.error("jefe_keepalive_release_failed", {
+          sandboxId,
+          phase: "setup-error",
+          message: releaseError instanceof Error ? releaseError.message : String(releaseError),
+        });
+      }
     }
     throw error;
   }
@@ -213,7 +248,8 @@ async function release(request: Request, env: Env): Promise<Response> {
   // sandbox to idle so a completed job never keeps Chromium resident.
   for (const processId of [PLAYWRIGHT_PROCESS, PUPPETEER_PROCESS]) {
     try {
-      await stopProcessIfPresent(sandbox, processId);
+      const process = await sandbox.getProcess(processId);
+      if (process) await process.kill();
     } catch (error) {
       errors.push(`${processId}: ${error instanceof Error ? error.message : String(error)}`);
     }
