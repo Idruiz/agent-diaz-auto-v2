@@ -139,11 +139,22 @@ async function setup(request: Request, env: Env): Promise<Response> {
     enableDefaultSession: false,
   });
 
-  const phase = async <T>(name: string, action: () => Promise<T>): Promise<T> => {
+  const phase = async <T>(
+    name: string,
+    action: () => Promise<T>,
+    timeoutMs = 45_000,
+  ): Promise<T> => {
     const startedAt = Date.now();
     console.log("jefe_setup_phase", { sandboxId, jobId, phase: name, state: "start" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const value = await action();
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${name} phase exceeded ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      });
+      const value = await Promise.race([action(), timeout]);
       console.log("jefe_setup_phase", {
         sandboxId,
         jobId,
@@ -162,6 +173,8 @@ async function setup(request: Request, env: Env): Promise<Response> {
         message: error instanceof Error ? error.message : String(error),
       });
       throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   };
 
@@ -170,10 +183,10 @@ async function setup(request: Request, env: Env): Promise<Response> {
   // so the execution container cannot disappear merely because the model is
   // reasoning or a long tool call has not produced traffic yet. The host must
   // call /jefe/release in a finally path to turn this back off.
-  await phase("keepalive", () => sandbox.setKeepAlive(true));
+  await phase("keepalive", () => sandbox.setKeepAlive(true), 15_000);
 
   try {
-    await phase("filesystem", () => prepareFilesystem(sandbox, jobId));
+    await phase("filesystem", () => prepareFilesystem(sandbox, jobId), 45_000);
 
     const browsers = { playwright: false, puppeteer: false };
     const browserStarts: Promise<void>[] = [];
@@ -182,7 +195,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
         phase("playwright", async () => {
           await startPlaywright(sandbox);
           browsers.playwright = true;
-        }),
+        }, 45_000),
       );
     }
     if (mode === "both" || mode === "puppeteer") {
@@ -190,7 +203,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
         phase("puppeteer", async () => {
           await startPuppeteer(sandbox);
           browsers.puppeteer = true;
-        }),
+        }, 45_000),
       );
     }
     if (browserStarts.length) await Promise.all(browserStarts);
@@ -211,7 +224,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
     });
   } catch (error) {
     // Setup did not hand ownership to a running job. Destroy the failed
-    // sandbox so a keepAlive container cannot pin the single-instance pool.
+    // sandbox so a keepAlive container cannot pin the available pool.
     try {
       await sandbox.destroy();
       console.log("jefe_setup_failed_sandbox_destroyed", { sandboxId, jobId });
