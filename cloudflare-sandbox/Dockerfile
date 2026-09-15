@@ -42,13 +42,15 @@ RUN npm install -g --omit=dev \
     puppeteer@25.10.0 \
     mcp-proxy@6.7.13
 
-RUN mkdir -p /workspace \
-    && useradd -m -s /bin/bash -d /home/sandbox sandbox \
-    && chown -R sandbox:sandbox /workspace /home/sandbox \
-    && chmod 700 /root
+RUN mkdir -p /workspace /home/sandbox \
+    && useradd -m -s /bin/bash -d /home/sandbox sandbox || true \
+    && chown -R sandbox:sandbox /home/sandbox
 
 EXPOSE 3000 8931 8932
 
-USER sandbox
+# Cloudflare's official Sandbox image runs the container server as the image
+# default user. Keep that behavior here: production bucket mounts require the
+# container process to open /dev/fuse. Dropping to an unprivileged UID causes
+# s3fs to fail before the R2 mount is established.
 WORKDIR /workspace
 ENTRYPOINT ["/container-server/sandbox"]
