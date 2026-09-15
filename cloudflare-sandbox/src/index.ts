@@ -3,7 +3,7 @@ import {
   Sandbox as BaseSandbox,
   getSandbox,
 } from "@cloudflare/sandbox";
-import { bridge, WarmPool, type BridgeEnv } from "@cloudflare/sandbox/bridge";
+import { bridge, WarmPool as BridgeWarmPool, type BridgeEnv } from "@cloudflare/sandbox/bridge";
 
 const PLAYWRIGHT_PORT = 8931;
 const PUPPETEER_PORT = 8932;
@@ -15,7 +15,7 @@ type BrowserMode = "both" | "playwright" | "puppeteer" | "off";
 
 interface Env extends BridgeEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
-  WarmPool: DurableObjectNamespace<WarmPool>;
+  WarmPool: DurableObjectNamespace<BridgeWarmPool>;
   JEFE_FS: R2Bucket;
   SANDBOX_API_KEY: string;
   SANDBOX_TRANSPORT?: string;
@@ -25,7 +25,13 @@ interface Env extends BridgeEnv {
   WARM_POOL_SCALE_BATCH_SIZE?: string;
 }
 
-export { ContainerProxy, WarmPool };
+export { ContainerProxy, BridgeWarmPool as WarmPool };
+
+// Fresh WarmPool Durable Object namespace for recovery from the 0/0 cached
+// capacity latch in the upstream bridge. The binding name remains `WarmPool`
+// so bridge() continues to work, while the old namespace is left intact and
+// unused rather than destructively deleting Worker state.
+export class WarmPoolV3 extends BridgeWarmPool {}
 
 function forwardedRequest(request: Request, pathname: string): Request {
   const url = new URL(request.url);
@@ -178,15 +184,8 @@ async function setup(request: Request, env: Env): Promise<Response> {
     }
   };
 
-  // Agent/tool runs can legitimately be quiet for longer than the normal idle
-  // window. Cloudflare Sandbox keepAlive emits platform heartbeats every ~30s,
-  // so the execution container cannot disappear merely because the model is
-  // reasoning or a long tool call has not produced traffic yet. The host must
-  // call /jefe/release in a finally path to turn this back off.
-  await phase("keepalive", () => sandbox.setKeepAlive(true), 15_000);
-
   try {
-    await phase("filesystem", () => prepareFilesystem(sandbox, jobId), 45_000);
+    await phase("filesystem", () => prepareFilesystem(sandbox, jobId), 40_000);
 
     const browsers = { playwright: false, puppeteer: false };
     const browserStarts: Promise<void>[] = [];
@@ -195,7 +194,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
         phase("playwright", async () => {
           await startPlaywright(sandbox);
           browsers.playwright = true;
-        }, 45_000),
+        }, 40_000),
       );
     }
     if (mode === "both" || mode === "puppeteer") {
@@ -203,10 +202,15 @@ async function setup(request: Request, env: Env): Promise<Response> {
         phase("puppeteer", async () => {
           await startPuppeteer(sandbox);
           browsers.puppeteer = true;
-        }, 45_000),
+        }, 40_000),
       );
     }
     if (browserStarts.length) await Promise.all(browserStarts);
+
+    // Only pin the sandbox after the filesystem and browser bridge are proven
+    // ready. A failed setup therefore cannot leave a keepAlive container
+    // stranded before the cleanup path gets control.
+    await phase("keepalive", () => sandbox.setKeepAlive(true), 10_000);
 
     console.log("jefe_setup_complete", { sandboxId, jobId, mode, browsers });
     return json({
