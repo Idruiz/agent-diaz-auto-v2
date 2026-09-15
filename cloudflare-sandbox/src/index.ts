@@ -142,26 +142,41 @@ async function checkpointPersistentWorkspace(
   jobId: string,
 ): Promise<{ bytes: number }> {
   const tmpPath = `/tmp/jefe-persist-${crypto.randomUUID()}.tar`;
-  const archive = await sandbox.exec(
-    `mkdir -p ${PERSIST_PATH}; tar cf ${tmpPath} -C ${PERSIST_PATH} .`,
-    { cwd: "/workspace", timeout: 20_000 },
-  );
-  if (!archive.success)
-    throw new Error(`Persistent workspace archive failed: ${archive.stderr.slice(0, 400)}`);
+  try {
+    const archive = await sandbox.exec(
+      `mkdir -p ${PERSIST_PATH}; tar cf ${tmpPath} -C ${PERSIST_PATH} . && stat -c %s ${tmpPath}`,
+      { cwd: "/workspace", timeout: 20_000 },
+    );
+    if (!archive.success)
+      throw new Error(`Persistent workspace archive failed: ${archive.stderr.slice(0, 400)}`);
 
-  const stream = await sandbox.readFileStream(tmpPath);
-  await env.JEFE_FS.put(persistArchiveKey(jobId), stream, {
-    httpMetadata: { contentType: "application/x-tar" },
-    customMetadata: {
-      jobId,
-      persistedAt: new Date().toISOString(),
-      mode: "checkpointed-workspace",
-    },
-  });
+    const bytes = Number.parseInt(archive.stdout.trim().split(/\s+/).at(-1) ?? "", 10);
+    if (!Number.isSafeInteger(bytes) || bytes < 0)
+      throw new Error("Persistent workspace archive size could not be determined");
+    if (bytes > PERSIST_ARCHIVE_MAX_BYTES)
+      throw new Error(
+        `Persistent workspace archive is ${bytes} bytes; checkpoint limit is ${PERSIST_ARCHIVE_MAX_BYTES}`,
+      );
 
-  const head = await env.JEFE_FS.head(persistArchiveKey(jobId));
-  await sandbox.exec(`rm -f ${tmpPath}`, { cwd: "/workspace", timeout: 5_000 }).catch(() => {});
-  return { bytes: head?.size ?? 0 };
+    const source = await sandbox.readFileStream(tmpPath);
+    const fixed = new FixedLengthStream(bytes);
+    const pump = source.pipeTo(fixed.writable);
+    await Promise.all([
+      env.JEFE_FS.put(persistArchiveKey(jobId), fixed.readable, {
+        httpMetadata: { contentType: "application/x-tar" },
+        customMetadata: {
+          jobId,
+          persistedAt: new Date().toISOString(),
+          mode: "checkpointed-workspace",
+        },
+      }),
+      pump,
+    ]);
+
+    return { bytes };
+  } finally {
+    await sandbox.exec(`rm -f ${tmpPath}`, { cwd: "/workspace", timeout: 5_000 }).catch(() => {});
+  }
 }
 
 async function startPlaywright(
