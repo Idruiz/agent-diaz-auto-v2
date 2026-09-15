@@ -114,6 +114,69 @@ export function apiRoutes(
     if (!c) return res.status(404).json({ error: "Conversation not found" });
     res.json({ ...c, messages: db.listMessages(c.id) });
   });
+  r.delete("/conversations/:id", (req, res) => {
+    const conversation = db.getConversation(req.params.id);
+    if (!conversation)
+      return res.status(404).json({ error: "Conversation not found" });
+    const active = db.raw
+      .prepare(
+        "SELECT 1 FROM jobs WHERE conversation_id=? AND status IN ('queued','running','waiting_approval','building')",
+      )
+      .get(conversation.id);
+    if (active)
+      return res.status(409).json({
+        error: "Cancel or finish the active task before deleting this conversation",
+      });
+
+    const deleted = db.deleteConversation(conversation.id);
+    let removedPaths = 0;
+    const storageRoot = path.resolve(config.storageRoot);
+    const removeOwnedPath = (target: string) => {
+      const resolved = path.resolve(target);
+      if (
+        resolved === storageRoot ||
+        !resolved.startsWith(storageRoot + path.sep)
+      ) {
+        log("warn", "conversation.delete_path_rejected", {
+          conversationId: conversation.id,
+          path: resolved,
+        });
+        return;
+      }
+      try {
+        fs.rmSync(resolved, { recursive: true, force: true });
+        removedPaths++;
+      } catch (error) {
+        log("warn", "conversation.delete_path_failed", {
+          conversationId: conversation.id,
+          path: resolved,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    for (const artifactPath of deleted.artifactPaths) removeOwnedPath(artifactPath);
+    for (const jobId of deleted.jobIds) {
+      removeOwnedPath(path.join(config.artifactDir, ".agent-v2", jobId));
+      removeOwnedPath(path.join(config.storageRoot, "diagnostics", jobId));
+      removeOwnedPath(
+        path.join(config.dataDir, "artifact-run-logs", `${jobId}.jsonl`),
+      );
+      removeOwnedPath(
+        path.join(config.dataDir, "artifact-run-logs", `${jobId}.jsonl.1`),
+      );
+    }
+    log("info", "conversation.deleted", {
+      conversationId: conversation.id,
+      jobs: deleted.jobIds.length,
+      removedPaths,
+    });
+    res.json({
+      ok: true,
+      id: conversation.id,
+      deletedJobs: deleted.jobIds.length,
+      removedPaths,
+    });
+  });
   r.patch("/conversations/:id/settings", (req, res) => {
     const parsed = UpdateConversationSettingsSchema.safeParse(req.body);
     if (!parsed.success)
