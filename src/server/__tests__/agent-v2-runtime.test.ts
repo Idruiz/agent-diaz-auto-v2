@@ -160,7 +160,7 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
     expect(definitions).toEqual([]);
   });
 
-  it("prepares authenticated in-sandbox browser MCPs over the Cloudflare R2 filesystem", async () => {
+  it("prepares authenticated in-sandbox browser MCPs over the checkpointed Cloudflare R2 filesystem", async () => {
     let authorization = "";
     let body = "";
     const prepared = await prepareCloudflareWorkspace({
@@ -180,9 +180,9 @@ describe("Agent Díaz v2 artifact runtime contract", () => {
           sandboxId: "cf-123",
           workspaceRoot: "/workspace",
           persistentPath: "/workspace/persist",
-          keepAlive: true,
+          keepAlive: false,
           filesystem: {
-            kind: "linux-r2-mounted",
+            kind: "linux-r2-checkpointed",
             posix: true,
             persistent: true,
           },
