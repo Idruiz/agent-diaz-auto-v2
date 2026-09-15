@@ -34,6 +34,10 @@ export { ContainerProxy, BridgeWarmPool as WarmPool };
 // unused rather than destructively deleting Worker state.
 export class WarmPoolV3 extends BridgeWarmPool {}
 
+// Fresh pool namespace paired with SandboxV4. This prevents stale capacity
+// state from the earlier split-container architecture from poisoning new jobs.
+export class WarmPoolV4 extends BridgeWarmPool {}
+
 function forwardedRequest(request: Request, pathname: string): Request {
   const url = new URL(request.url);
   url.protocol = "http:";
@@ -56,6 +60,11 @@ export class Sandbox extends BaseSandbox<Env> {
     return super.fetch(request);
   }
 }
+
+// Fresh container-enabled Durable Object namespace. The old Sandbox namespace
+// may contain keepAlive orphans created when JEFE routes addressed sandboxId
+// directly instead of the warm-pool-assigned container UUID.
+export class SandboxV4 extends Sandbox {}
 
 function authorized(request: Request, env: Env): boolean {
   const key = env.SANDBOX_API_KEY?.trim();
@@ -187,15 +196,31 @@ async function startPuppeteer(
   await process.waitForPort(PUPPETEER_PORT, { mode: "tcp", timeout: 30_000 });
 }
 
+async function resolveSandbox(
+  env: Env,
+  sandboxId: string,
+): Promise<ReturnType<typeof getSandbox<Sandbox>>> {
+  const poolId = env.WarmPool.idFromName("global-pool");
+  const pool = env.WarmPool.get(poolId);
+  const existing = await pool.lookupContainer(sandboxId);
+  const containerUUID = existing ?? (await pool.getContainer(sandboxId));
+  console.log("jefe_sandbox_resolved", {
+    sandboxId,
+    containerUUID,
+    reused: Boolean(existing),
+  });
+  return getSandbox(env.Sandbox, containerUUID, {
+    transport: "rpc",
+    enableDefaultSession: false,
+  });
+}
+
 async function setup(request: Request, env: Env): Promise<Response> {
   const body = (await request.json()) as Record<string, unknown>;
   const sandboxId = safeToken(body.sandboxId, "sandboxId");
   const jobId = safeToken(body.jobId, "jobId");
   const mode = browserMode(body.browserMode);
-  const sandbox = getSandbox(env.Sandbox, sandboxId, {
-    transport: "rpc",
-    enableDefaultSession: false,
-  });
+  const sandbox = await resolveSandbox(env, sandboxId);
 
   const phase = async <T>(
     name: string,
@@ -259,18 +284,16 @@ async function setup(request: Request, env: Env): Promise<Response> {
     }
     if (browserStarts.length) await Promise.all(browserStarts);
 
-    // Only pin the sandbox after the filesystem and browser bridge are proven
-    // ready. A failed setup therefore cannot leave a keepAlive container
-    // stranded before the cleanup path gets control.
-    await phase("keepalive", () => sandbox.setKeepAlive(true), 10_000);
-
+    // Do not pin the container. BaseSandbox/Container activity renews the
+    // normal idle timer on real work, while the default sleepAfter safety net
+    // guarantees a crashed caller cannot hold a slot forever.
     console.log("jefe_setup_complete", { sandboxId, jobId, mode, browsers, persistence });
     return json({
       ok: true,
       sandboxId,
       workspaceRoot: "/workspace",
       persistentPath: PERSIST_PATH,
-      keepAlive: true,
+      keepAlive: false,
       filesystem: {
         kind: "linux-r2-checkpointed",
         posix: true,
@@ -282,7 +305,8 @@ async function setup(request: Request, env: Env): Promise<Response> {
     });
   } catch (error) {
     // Setup did not hand ownership to a running job. Destroy the failed
-    // sandbox so a keepAlive container cannot pin the available pool.
+    // pool-tracked sandbox immediately; otherwise normal idle sleep remains
+    // the final safety net.
     try {
       await sandbox.destroy();
       console.log("jefe_setup_failed_sandbox_destroyed", { sandboxId, jobId });
@@ -292,15 +316,6 @@ async function setup(request: Request, env: Env): Promise<Response> {
         jobId,
         message: destroyError instanceof Error ? destroyError.message : String(destroyError),
       });
-      try {
-        await sandbox.setKeepAlive(false);
-      } catch (releaseError) {
-        console.error("jefe_keepalive_release_failed", {
-          sandboxId,
-          phase: "setup-error",
-          message: releaseError instanceof Error ? releaseError.message : String(releaseError),
-        });
-      }
     }
     throw error;
   }
@@ -310,10 +325,7 @@ async function release(request: Request, env: Env): Promise<Response> {
   const body = (await request.json()) as Record<string, unknown>;
   const sandboxId = safeToken(body.sandboxId, "sandboxId");
   const jobId = safeToken(body.jobId, "jobId");
-  const sandbox = getSandbox(env.Sandbox, sandboxId, {
-    transport: "rpc",
-    enableDefaultSession: false,
-  });
+  const sandbox = await resolveSandbox(env, sandboxId);
   const errors: string[] = [];
 
   // Browser MCP processes are task-scoped. Stop them before allowing the
@@ -338,12 +350,6 @@ async function release(request: Request, env: Env): Promise<Response> {
     errors.push(`persistence: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  try {
-    await sandbox.setKeepAlive(false);
-  } catch (error) {
-    errors.push(`keepAlive: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
   if (errors.length) {
     console.error("jefe_release_partial_failure", { sandboxId, errors });
     return json({ ok: false, sandboxId, released: false, errors }, 500);
@@ -355,10 +361,7 @@ async function release(request: Request, env: Env): Promise<Response> {
 async function proxyMcp(request: Request, env: Env, match: RegExpMatchArray): Promise<Response> {
   const sandboxId = safeToken(decodeURIComponent(match[1] ?? ""), "sandboxId");
   const browser = match[2];
-  const sandbox = getSandbox(env.Sandbox, sandboxId, {
-    transport: "rpc",
-    enableDefaultSession: false,
-  });
+  const sandbox = await resolveSandbox(env, sandboxId);
   const internalPath =
     browser === "playwright" ? "/__jefe/mcp/playwright" : "/__jefe/mcp/puppeteer";
   const proxyRequest = forwardedRequest(request, internalPath);
@@ -383,7 +386,7 @@ const sandboxBridge = bridge({
           ok: true,
           filesystem: "r2-checkpointed",
           browsers: "in-sandbox",
-          keepAliveManaged: true,
+          keepAliveManaged: false,
         });
       return new Response("Not Found", { status: 404 });
     } catch (error) {

@@ -5,7 +5,7 @@ import {
 } from "../v2/cloudflare-workspace.js";
 
 describe("Cloudflare workspace lifecycle", () => {
-  it("arms keepAlive setup and releases it before the SDK session closes", async () => {
+  it("arms workspace cleanup and releases it before the SDK session closes", async () => {
     const originalClose = vi.fn(async () => undefined);
     const session = {
       state: { sandboxId: "sandbox-test-1" },
@@ -24,7 +24,7 @@ describe("Cloudflare workspace lifecycle", () => {
           sandboxId: "sandbox-test-1",
           workspaceRoot: "/workspace",
           persistentPath: "/workspace/persist",
-          keepAlive: true,
+          keepAlive: false,
           filesystem: {
             kind: "linux-r2-mounted",
             posix: true,
@@ -51,7 +51,7 @@ describe("Cloudflare workspace lifecycle", () => {
       fetchImpl: fetchImpl as typeof fetch,
     });
 
-    expect(prepared.keepAlive).toBe(true);
+    expect(prepared.keepAlive).toBe(false);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe("https://sandbox.example.test/jefe/setup");
     expect(requests[0]?.body).toMatchObject({
@@ -64,7 +64,7 @@ describe("Cloudflare workspace lifecycle", () => {
 
     expect(requests).toHaveLength(2);
     expect(requests[1]?.url).toBe("https://sandbox.example.test/jefe/release");
-    expect(requests[1]?.body).toEqual({ sandboxId: "sandbox-test-1" });
+    expect(requests[1]?.body).toEqual({ sandboxId: "sandbox-test-1", jobId: "job-test-1" });
     expect(originalClose).toHaveBeenCalledTimes(1);
   });
 
@@ -84,7 +84,7 @@ describe("Cloudflare workspace lifecycle", () => {
           sandboxId: "sandbox-test-2",
           workspaceRoot: "/workspace",
           persistentPath: "/workspace/persist",
-          keepAlive: true,
+          keepAlive: false,
           filesystem: {
             kind: "linux-r2-mounted",
             posix: true,

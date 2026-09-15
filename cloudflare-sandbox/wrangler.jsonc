@@ -10,7 +10,7 @@
   },
   "containers": [
     {
-      "class_name": "Sandbox",
+      "class_name": "SandboxV4",
       "image": "./Dockerfile",
       "instance_type": "standard-1",
       "max_instances": 4
@@ -18,14 +18,15 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "class_name": "Sandbox", "name": "Sandbox" },
-      { "class_name": "WarmPoolV3", "name": "WarmPool" }
+      { "class_name": "SandboxV4", "name": "Sandbox" },
+      { "class_name": "WarmPoolV4", "name": "WarmPool" }
     ]
   },
   "migrations": [
     { "new_sqlite_classes": ["Sandbox"], "tag": "v1" },
     { "new_sqlite_classes": ["WarmPool"], "tag": "v2" },
-    { "new_sqlite_classes": ["WarmPoolV3"], "tag": "v3" }
+    { "new_sqlite_classes": ["WarmPoolV3"], "tag": "v3" },
+    { "new_sqlite_classes": ["SandboxV4", "WarmPoolV4"], "tag": "v4" }
   ],
   "r2_buckets": [
     { "binding": "JEFE_FS", "bucket_name": "jefe-auto-fs" }

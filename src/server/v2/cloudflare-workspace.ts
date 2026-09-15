@@ -9,7 +9,7 @@ const SetupResponseSchema = z.object({
   sandboxId: z.string().min(1),
   workspaceRoot: z.literal("/workspace"),
   persistentPath: z.literal("/workspace/persist"),
-  keepAlive: z.literal(true),
+  keepAlive: z.literal(false),
   filesystem: z.object({
     kind: z.enum(["linux-r2-mounted", "linux-r2-checkpointed"]),
     posix: z.literal(true),
@@ -35,12 +35,12 @@ type ClosableCloudflareSession = {
 // cloudflareSandboxIdFromSession() is called immediately before setup by the
 // existing artifact runtime. Retain only that short-lived association so a
 // successful setup can wrap the session's existing close() and guarantee the
-// bridge keepAlive is released without changing the hard-earned agent loop.
+// bridge checkpoint/browser cleanup runs without changing the hard-earned agent loop.
 const sessionsAwaitingManagedClose = new Map<string, ClosableCloudflareSession>();
 
 export interface CloudflareWorkspacePreparation {
   persistentPath: "/workspace/persist";
-  keepAlive: true;
+  keepAlive: false;
   mcpDefinitions: V2InternalMcpDefinition[];
   filesystem: {
     kind: "linux-r2-mounted" | "linux-r2-checkpointed";
@@ -192,9 +192,9 @@ export async function prepareCloudflareWorkspace(args: {
     );
   }
 
-  // From this point the bridge has enabled keepAlive. Arm cleanup before
-  // parsing the response so even a contract/schema error still releases it
-  // when the artifact runtime reaches sandboxSession.close() in its finally.
+  // Arm bridge cleanup before parsing the response so even a contract/schema
+  // error still checkpoints persistence and stops browser helpers when the
+  // artifact runtime reaches sandboxSession.close() in its finally.
   armManagedSessionClose({
     sandboxId: args.sandboxId,
     jobId: args.jobId,
