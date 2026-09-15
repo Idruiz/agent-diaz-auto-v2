@@ -147,6 +147,7 @@ export interface Db {
   createConversation(id: string, title: string): ConversationView;
   listConversations(): ConversationView[];
   getConversation(id: string): ConversationView | undefined;
+  deleteConversation(id: string): { deleted: boolean; jobIds: string[]; artifactPaths: string[] };
   setConversationMode(id: string, mode: ModelMode): ConversationView;
   setConversationSettings(
     id: string,
@@ -632,6 +633,27 @@ export function openDatabase(config: Config): Db {
         )
         .get(id);
       return r ? mapConversation(r) : undefined;
+    },
+    deleteConversation: (id) => {
+      const exists = raw.prepare("SELECT 1 FROM conversations WHERE id=?").get(id);
+      if (!exists) return { deleted: false, jobIds: [], artifactPaths: [] };
+      const jobIds = (
+        raw.prepare("SELECT id FROM jobs WHERE conversation_id=?").all(id) as Array<{ id: string }>
+      ).map((row) => row.id);
+      const artifactPaths = jobIds.length
+        ? (
+            raw
+              .prepare(
+                `SELECT path FROM artifacts WHERE job_id IN (${jobIds.map(() => "?").join(",")})`,
+              )
+              .all(...jobIds) as Array<{ path: string }>
+          ).map((row) => row.path)
+        : [];
+      raw.transaction(() => {
+        raw.prepare("DELETE FROM jobs WHERE conversation_id=?").run(id);
+        raw.prepare("DELETE FROM conversations WHERE id=?").run(id);
+      })();
+      return { deleted: true, jobIds, artifactPaths };
     },
     setConversationMode: (id, mode) => {
       raw
