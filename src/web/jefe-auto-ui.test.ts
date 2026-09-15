@@ -8,6 +8,8 @@ describe("JEFE//AUTO UI contract", () => {
     const chat = fs.readFileSync("src/web/chat.css", "utf8");
     expect(main).toContain("JEFE//AUTO");
     expect(main).toContain("@fontsource/orbitron/800.css");
+    expect(main).toContain("api.deleteConversation(item.id)");
+    expect(main).toContain("conversationDelete");
     expect(styles).toContain("--jefe-bg: #f6f8fc");
     expect(styles).toContain("font-family: \"Orbitron\"");
     expect(styles + chat).not.toMatch(/#57d795|#39ff14|#00ff00/i);
