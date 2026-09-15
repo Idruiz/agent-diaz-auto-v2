@@ -11,7 +11,7 @@ const SetupResponseSchema = z.object({
   persistentPath: z.literal("/workspace/persist"),
   keepAlive: z.literal(true),
   filesystem: z.object({
-    kind: z.literal("linux-r2-mounted"),
+    kind: z.enum(["linux-r2-mounted", "linux-r2-checkpointed"]),
     posix: z.literal(true),
     persistent: z.literal(true),
   }),
@@ -43,7 +43,7 @@ export interface CloudflareWorkspacePreparation {
   keepAlive: true;
   mcpDefinitions: V2InternalMcpDefinition[];
   filesystem: {
-    kind: "linux-r2-mounted";
+    kind: "linux-r2-mounted" | "linux-r2-checkpointed";
     posix: true;
     persistent: true;
   };
@@ -91,6 +91,7 @@ function authenticatedHeaders(apiKey: string): Record<string, string> {
 
 async function releaseRequest(args: {
   sandboxId: string;
+  jobId: string;
   workerUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
@@ -106,7 +107,7 @@ async function releaseRequest(args: {
     method: "POST",
     signal: AbortSignal.timeout(30_000),
     headers: authenticatedHeaders(apiKey),
-    body: JSON.stringify({ sandboxId: args.sandboxId }),
+    body: JSON.stringify({ sandboxId: args.sandboxId, jobId: args.jobId }),
   });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 800);
@@ -121,6 +122,7 @@ async function releaseRequest(args: {
 
 function armManagedSessionClose(args: {
   sandboxId: string;
+  jobId: string;
   workerUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
@@ -195,6 +197,7 @@ export async function prepareCloudflareWorkspace(args: {
   // when the artifact runtime reaches sandboxSession.close() in its finally.
   armManagedSessionClose({
     sandboxId: args.sandboxId,
+    jobId: args.jobId,
     workerUrl: args.workerUrl,
     apiKey,
     fetchImpl: args.fetchImpl,
@@ -247,6 +250,7 @@ export async function prepareCloudflareWorkspace(args: {
 
 export async function releaseCloudflareWorkspace(args: {
   sandboxId: string;
+  jobId: string;
   workerUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
