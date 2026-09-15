@@ -40,6 +40,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
+  deleteConversation: (id: string) =>
+    call<{ ok: true; id: string; deletedJobs: number; removedPaths: number }>(
+      `/api/conversations/${id}`,
+      { method: "DELETE" },
+    ),
   updateConversationSettings: (
     id: string,
     settings: { modelMode?: ModelMode; persona?: Persona },
