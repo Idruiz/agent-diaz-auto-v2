@@ -10,6 +10,7 @@ const PUPPETEER_PORT = 8932;
 const PERSIST_PATH = "/workspace/persist";
 const PLAYWRIGHT_PROCESS = "jefe-playwright-mcp";
 const PUPPETEER_PROCESS = "jefe-puppeteer-mcp";
+const PERSIST_ARCHIVE_MAX_BYTES = 32 * 1024 * 1024;
 
 type BrowserMode = "both" | "playwright" | "puppeteer" | "off";
 
@@ -79,28 +80,79 @@ function browserMode(value: unknown): BrowserMode {
   throw new Error("browserMode must be both, playwright, puppeteer, or off");
 }
 
-async function prepareFilesystem(
-  sandbox: ReturnType<typeof getSandbox<Sandbox>>,
-  jobId: string,
-): Promise<void> {
-  // Each CloudflareSandboxClient session supplies a fresh sandboxId, so setup
-  // should mount once. Avoid a speculative unmount on a brand-new container:
-  // Cloudflare documents bucket mounts as sandbox-wide and recommends mounting
-  // once per sandbox.
-  await sandbox.mountBucket("JEFE_FS", PERSIST_PATH, {
-    prefix: `/jobs/${jobId}/`,
-    readOnly: false,
-  });
 
-  // Prove this is not merely object API access: an ordinary POSIX shell creates,
-  // tests, renames, reads and removes a file through the mounted path.
-  const sentinel = `.jefe-posix-${crypto.randomUUID().replaceAll("-", "")}`;
-  const result = await sandbox.exec(
-    `set -eu; cd ${PERSIST_PATH}; printf 'jefe-posix-ok' > ${sentinel}; test -f ${sentinel}; mv ${sentinel} ${sentinel}.moved; grep -q 'jefe-posix-ok' ${sentinel}.moved; rm ${sentinel}.moved; mkdir -p browser/playwright browser/devtools recovery`,
+function persistArchiveKey(jobId: string): string {
+  return `jobs/${jobId}/workspace-persist.tar`;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let output = "";
+  const chunk = 6144;
+  for (let i = 0; i < bytes.length; i += chunk)
+    output += btoa(String.fromCharCode(...bytes.subarray(i, i + chunk)));
+  return output;
+}
+
+async function preparePersistentWorkspace(
+  sandbox: ReturnType<typeof getSandbox<Sandbox>>,
+  env: Env,
+  jobId: string,
+): Promise<{ restored: boolean; bytes: number }> {
+  const mkdir = await sandbox.exec(
+    `mkdir -p ${PERSIST_PATH}/browser/playwright ${PERSIST_PATH}/browser/devtools ${PERSIST_PATH}/recovery`,
+    { cwd: "/workspace", timeout: 10_000 },
+  );
+  if (!mkdir.success)
+    throw new Error(`Persistent workspace directory creation failed: ${mkdir.stderr.slice(0, 400)}`);
+
+  const key = persistArchiveKey(jobId);
+  const object = await env.JEFE_FS.get(key);
+  if (!object) return { restored: false, bytes: 0 };
+
+  if (object.size > PERSIST_ARCHIVE_MAX_BYTES)
+    throw new Error(
+      `Persistent workspace archive is ${object.size} bytes; hydrate limit is ${PERSIST_ARCHIVE_MAX_BYTES}`,
+    );
+
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  const tmpPath = `/tmp/jefe-persist-${crypto.randomUUID()}.tar`;
+  await sandbox.writeFile(tmpPath, toBase64(bytes), { encoding: "base64" });
+  const extract = await sandbox.exec(
+    `tar xf ${tmpPath} -C ${PERSIST_PATH} && rm -f ${tmpPath}`,
     { cwd: "/workspace", timeout: 20_000 },
   );
-  if (!result.success)
-    throw new Error(`R2 POSIX mount verification failed: ${result.stderr.slice(0, 400)}`);
+  if (!extract.success)
+    throw new Error(`Persistent workspace hydrate failed: ${extract.stderr.slice(0, 400)}`);
+
+  return { restored: true, bytes: object.size };
+}
+
+async function checkpointPersistentWorkspace(
+  sandbox: ReturnType<typeof getSandbox<Sandbox>>,
+  env: Env,
+  jobId: string,
+): Promise<{ bytes: number }> {
+  const tmpPath = `/tmp/jefe-persist-${crypto.randomUUID()}.tar`;
+  const archive = await sandbox.exec(
+    `mkdir -p ${PERSIST_PATH}; tar cf ${tmpPath} -C ${PERSIST_PATH} .`,
+    { cwd: "/workspace", timeout: 20_000 },
+  );
+  if (!archive.success)
+    throw new Error(`Persistent workspace archive failed: ${archive.stderr.slice(0, 400)}`);
+
+  const stream = await sandbox.readFileStream(tmpPath);
+  await env.JEFE_FS.put(persistArchiveKey(jobId), stream, {
+    httpMetadata: { contentType: "application/x-tar" },
+    customMetadata: {
+      jobId,
+      persistedAt: new Date().toISOString(),
+      mode: "checkpointed-workspace",
+    },
+  });
+
+  const head = await env.JEFE_FS.head(persistArchiveKey(jobId));
+  await sandbox.exec(`rm -f ${tmpPath}`, { cwd: "/workspace", timeout: 5_000 }).catch(() => {});
+  return { bytes: head?.size ?? 0 };
 }
 
 async function startPlaywright(
@@ -185,7 +237,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
   };
 
   try {
-    await phase("filesystem", () => prepareFilesystem(sandbox, jobId), 40_000);
+    const persistence = await phase("filesystem", () => preparePersistentWorkspace(sandbox, env, jobId), 40_000);
 
     const browsers = { playwright: false, puppeteer: false };
     const browserStarts: Promise<void>[] = [];
@@ -212,7 +264,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
     // stranded before the cleanup path gets control.
     await phase("keepalive", () => sandbox.setKeepAlive(true), 10_000);
 
-    console.log("jefe_setup_complete", { sandboxId, jobId, mode, browsers });
+    console.log("jefe_setup_complete", { sandboxId, jobId, mode, browsers, persistence });
     return json({
       ok: true,
       sandboxId,
@@ -220,9 +272,11 @@ async function setup(request: Request, env: Env): Promise<Response> {
       persistentPath: PERSIST_PATH,
       keepAlive: true,
       filesystem: {
-        kind: "linux-r2-mounted",
+        kind: "linux-r2-checkpointed",
         posix: true,
         persistent: true,
+        restored: persistence.restored,
+        restoredBytes: persistence.bytes,
       },
       browsers,
     });
@@ -255,6 +309,7 @@ async function setup(request: Request, env: Env): Promise<Response> {
 async function release(request: Request, env: Env): Promise<Response> {
   const body = (await request.json()) as Record<string, unknown>;
   const sandboxId = safeToken(body.sandboxId, "sandboxId");
+  const jobId = safeToken(body.jobId, "jobId");
   const sandbox = getSandbox(env.Sandbox, sandboxId, {
     transport: "rpc",
     enableDefaultSession: false,
@@ -273,6 +328,17 @@ async function release(request: Request, env: Env): Promise<Response> {
   }
 
   try {
+    const checkpoint = await checkpointPersistentWorkspace(sandbox, env, jobId);
+    console.log("jefe_persistence_checkpointed", {
+      sandboxId,
+      jobId,
+      bytes: checkpoint.bytes,
+    });
+  } catch (error) {
+    errors.push(`persistence: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
     await sandbox.setKeepAlive(false);
   } catch (error) {
     errors.push(`keepAlive: ${error instanceof Error ? error.message : String(error)}`);
@@ -283,7 +349,7 @@ async function release(request: Request, env: Env): Promise<Response> {
     return json({ ok: false, sandboxId, released: false, errors }, 500);
   }
 
-  return json({ ok: true, sandboxId, released: true, keepAlive: false });
+  return json({ ok: true, sandboxId, jobId, released: true, keepAlive: false });
 }
 
 async function proxyMcp(request: Request, env: Env, match: RegExpMatchArray): Promise<Response> {
@@ -315,7 +381,7 @@ const sandboxBridge = bridge({
       if (url.pathname === "/jefe/health")
         return json({
           ok: true,
-          filesystem: "r2-mounted",
+          filesystem: "r2-checkpointed",
           browsers: "in-sandbox",
           keepAliveManaged: true,
         });
