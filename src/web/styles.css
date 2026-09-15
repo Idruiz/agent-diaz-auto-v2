@@ -158,7 +158,13 @@ button {
   max-height: calc(100vh - 190px);
   overflow: auto;
 }
-.rail nav button {
+.conversationNavItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: stretch;
+  border-radius: 10px;
+}
+.conversationOpen {
   text-align: left;
   background: transparent;
   color: #dae5eb;
@@ -168,11 +174,12 @@ button {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr);
   gap: 0.12rem 0.55rem;
+  min-width: 0;
 }
-.rail nav button.active {
+.conversationNavItem.active {
   background: #19384b;
 }
-.rail nav button b,
+.conversationOpen b,
 .rail nav small {
   white-space: nowrap;
   overflow: hidden;
@@ -180,6 +187,28 @@ button {
 }
 .rail nav small {
   grid-column: 2;
+}
+.conversationDelete {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8998a4;
+  font-size: 1.15rem;
+  line-height: 1;
+  opacity: 0.5;
+  text-align: center;
+}
+.conversationNavItem:hover .conversationDelete,
+.conversationNavItem.active .conversationDelete {
+  opacity: 1;
+}
+.conversationDelete:hover {
+  background: #fff0f2;
+  color: #aa3f52;
 }
 .dot {
   width: 8px;
@@ -594,9 +623,12 @@ body { background: var(--jefe-bg); color: var(--jefe-ink); }
 .brand small, .rail nav small, .artifacts small { color: var(--jefe-muted); }
 .new { border-color: #9aa9da; color: var(--jefe-accent); background: rgba(255,255,255,.65); font-weight: 750; }
 .new:hover { background: var(--jefe-soft); }
-.rail nav button { color: #343a4d; }
-.rail nav button:hover { background: #e6eaf3; }
-.rail nav button.active { background: #dfe6ff; color: #1f3f9f; box-shadow: inset 3px 0 0 var(--jefe-accent); }
+.conversationOpen { color: #343a4d; }
+.conversationOpen:hover { background: #e6eaf3; }
+.conversationNavItem.active { background: #dfe6ff; }
+.conversationNavItem.active .conversationOpen { color: #1f3f9f; box-shadow: inset 3px 0 0 var(--jefe-accent); }
+.conversationDelete { color: #7d8798; }
+.conversationDelete:hover { background: #ffe9ed; color: var(--jefe-danger); }
 .dot { background: #9aa5b8; }
 .dot.completed { background: #536edb; }
 .logout, .danger { border-color: #d6a7af; color: #a83f50; background: #fff8f9; }
