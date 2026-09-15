@@ -913,6 +913,34 @@ function App() {
     setUploads([]);
     await loadConversation(id);
   };
+  const deleteConversation = async (item: ConversationView) => {
+    const confirmed = window.confirm(
+      `Delete “${item.title}”? This removes its messages, jobs, run logs, and generated artifacts from JEFE//AUTO.`,
+    );
+    if (!confirmed) return;
+    try {
+      setErr("");
+      await api.deleteConversation(item.id);
+      if (conversationId === item.id) {
+        stopVoice();
+        setConversationId(null);
+        setMessages([]);
+        setSelected(null);
+        setDetail(null);
+        setUploads([]);
+        setArtifactLogs(null);
+      }
+      const [convos, jobList] = await Promise.all([
+        api.conversations(),
+        api.jobs(),
+      ]);
+      setConversations(convos);
+      setJobs(jobList);
+    } catch (error) {
+      setErr((error as Error).message);
+    }
+  };
+
   const changeMode = async (mode: ModelMode) => {
     if (!conversationId || sending || voiceActive) return;
     try {
@@ -976,21 +1004,33 @@ function App() {
           </button>
           <nav>
             {conversations.map((item) => (
-              <button
+              <div
                 key={item.id}
-                className={conversationId === item.id ? "active" : ""}
-                onClick={() => void openConversation(item.id)}
+                className={`conversationNavItem ${conversationId === item.id ? "active" : ""}`}
               >
-                <span
-                  className={`dot ${item.status === "active" ? "completed" : ""}`}
-                />
-                <b>{item.title}</b>
-                <small>
-                  {item.status === "archived"
-                    ? "Archived summary"
-                    : `${item.messageCount} messages · ${personaProfile(item.persona).name} · ${item.modelMode}`}
-                </small>
-              </button>
+                <button
+                  className="conversationOpen"
+                  onClick={() => void openConversation(item.id)}
+                >
+                  <span
+                    className={`dot ${item.status === "active" ? "completed" : ""}`}
+                  />
+                  <b>{item.title}</b>
+                  <small>
+                    {item.status === "archived"
+                      ? "Archived summary"
+                      : `${item.messageCount} messages · ${personaProfile(item.persona).name} · ${item.modelMode}`}
+                  </small>
+                </button>
+                <button
+                  className="conversationDelete"
+                  aria-label={`Delete ${item.title}`}
+                  title="Delete conversation"
+                  onClick={() => void deleteConversation(item)}
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </nav>
         </div>
