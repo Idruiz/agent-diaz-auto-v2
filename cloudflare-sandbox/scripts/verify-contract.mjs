@@ -7,6 +7,8 @@ const wrangler = fs.readFileSync(new URL("../wrangler.jsonc", import.meta.url), 
 const requiredSource = [
   'JEFE_FS.get(key)',
   'JEFE_FS.put(persistArchiveKey(jobId)',
+  'new FixedLengthStream(bytes)',
+  'source.pipeTo(fixed.writable)',
   'pool.lookupContainer(sandboxId)',
   'pool.getContainer(sandboxId)',
   'getSandbox(env.Sandbox, containerUUID',
@@ -34,6 +36,8 @@ if (source.includes("getSandbox(env.Sandbox, sandboxId"))
   throw new Error("JEFE routes must resolve the pool-assigned container UUID, never sandboxId directly");
 if (/setKeepAlive\(true\)/.test(source))
   throw new Error("JEFE setup must not pin containers with keepAlive");
+if (source.includes("JEFE_FS.put(persistArchiveKey(jobId), stream"))
+  throw new Error("R2 checkpoints must use a known-length stream");
 if (!wrangler.includes('"class_name": "SandboxV4"')) throw new Error("Fresh SandboxV4 container namespace missing");
 if (!wrangler.includes('"class_name": "WarmPoolV4"')) throw new Error("Fresh WarmPoolV4 namespace missing");
 if (!wrangler.includes('"max_instances": 4')) throw new Error("Container max_instances must be 4");
